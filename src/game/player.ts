@@ -2,7 +2,7 @@ import { Container, Sprite, type Texture } from 'pixi.js';
 import { approach, clamp, damp, lerp, type Rect } from '../core/math';
 import type { PlayerInput } from '../core/input';
 import { MassSystem } from './mass';
-import { Tilemap } from './tilemap';
+import type { Collider } from './physics';
 import type { Particles } from '../render/particles';
 
 /**
@@ -19,6 +19,18 @@ export interface PlayerFx {
 }
 
 export interface SlamImpact { x: number; y: number; power: number }
+
+/**
+ * Cose successe al personaggio durante l'ultimo passo, che il gioco legge e
+ * svuota: così la logica degli oggetti resta fuori dal personaggio.
+ */
+export type PlayerEvent =
+  | { type: 'jumped' }
+  | { type: 'landed'; vy: number; slam: boolean }
+  /** Tasto abilità premuto a terra: usa l'oggetto (posa, riprendi, richiama). */
+  | { type: 'object' }
+  /** Abilità tentata nello stato di massa sbagliato. */
+  | { type: 'denied'; need: 'heavy' | 'light' };
 
 export interface PlayerTuning {
   runSpeed: number;
@@ -83,6 +95,9 @@ export class Player {
   private dashSpent = false;
   private gliding = false;
   private pendingImpact: SlamImpact | null = null;
+  /** Rallentamento mentre si spinge una cassa (1 = nessuno). */
+  private pushDrag = 1;
+  readonly events: PlayerEvent[] = [];
 
   readonly view = new Container();
   private readonly sprite = new Sprite();
@@ -113,12 +128,30 @@ export class Player {
   get isDashing(): boolean { return this.dashTimer > 0; }
   get isSlamming(): boolean { return this.slamming; }
   get isGliding(): boolean { return this.gliding; }
+  /** -1 o 1: verso cui guarda il personaggio. */
+  get facingDir(): number { return this.facing; }
 
   /** L'urto va letto una volta sola: il gioco lo consuma e lo trasforma in onda. */
   takeImpact(): SlamImpact | null {
     const i = this.pendingImpact;
     this.pendingImpact = null;
     return i;
+  }
+
+  /**
+   * Spara il personaggio in alto fino a circa `height` pixel. La velocità
+   * si calcola con la gravità della sua massa attuale, quindi l'altezza è
+   * davvero quella; e non è un salto, perciò rilasciare il tasto non la taglia.
+   */
+  launch(height: number): void {
+    const g = this.tuning.gravity * lerp(0.62, 1.42, this.mass);
+    this.vy = -Math.sqrt(2 * g * Math.max(height, 0));
+    this.jumping = false;
+    this.slamming = false;
+    this.dashTimer = 0;
+    this.onGround = false;
+    this.coyote = 0;
+    this.squash = 1.45;
   }
 
   placeAt(x: number, y: number, isSpawn = false): void {
@@ -141,9 +174,13 @@ export class Player {
     this.placeAt(this.spawn.x, this.spawn.y);
   }
 
-  update(dt: number, map: Tilemap, particles: Particles, fx: PlayerFx): void {
+  update(dt: number, map: Collider, particles: Particles, fx: PlayerFx): void {
     this.prevX = this.x;
     this.prevY = this.y;
+
+    // Se un corpo ci è finito addosso (cassa caduta, oggetto posato male),
+    // risaliamo di qualche pixel invece di restare incastrati.
+    for (let i = 0; i < 10 && map.overlapsSolid(this.hitbox); i++) this.y -= 1;
     const t = this.tuning;
     const m = this.mass;
 
@@ -164,7 +201,7 @@ export class Player {
       const accel = this.onGround
         ? (move !== 0 ? t.groundAccel : t.groundDecel)
         : (move !== 0 ? t.airAccel : t.airDecel);
-      this.vx = approach(this.vx, move * t.runSpeed * speedScale, accel * dt);
+      this.vx = approach(this.vx, move * t.runSpeed * speedScale * this.pushDrag, accel * dt);
       if (move !== 0) this.facing = move > 0 ? 1 : -1;
     } else {
       this.vx = approach(this.vx, 0, 2400 * dt);
@@ -176,6 +213,7 @@ export class Player {
     if (!this.slamming && this.dashTimer <= 0
         && this.input.jumpBuffered(t.jumpBuffer) && this.coyote > 0) {
       this.input.consumeJump();
+      this.events.push({ type: 'jumped' });
       this.coyote = 0;
       this.vy = -t.jumpVelocity * jumpScale;
       this.jumping = true;
@@ -221,12 +259,14 @@ export class Player {
     }
 
     /* --- collisioni --------------------------------------------------- */
+    this.pushDrag = 1;
     this.moveX(this.vx * dt, map);
     this.wasOnGround = this.onGround;
+    const fallSpeed = this.vy;
     this.moveY(this.vy * dt, map);
 
     /* --- feedback ----------------------------------------------------- */
-    if (this.onGround && !this.wasOnGround) this.onLand(particles, fx);
+    if (this.onGround && !this.wasOnGround) this.onLand(particles, fx, fallSpeed);
     if (this.onGround) {
       this.dashSpent = false;
       if (Math.abs(this.vx) > 24) {
@@ -249,7 +289,30 @@ export class Player {
   private updateAbility(dt: number, particles: Particles, fx: PlayerFx): void {
     this.dashTimer = Math.max(0, this.dashTimer - dt);
 
+    // A terra il tasto abilità usa l'oggetto. Finestra strettissima: un
+    // tasto premuto in aria poco prima di atterrare non deve posare niente.
+    if (this.onGround) {
+      if (this.input.abilityBuffered(1 / 30)) {
+        this.input.consumeAbility();
+        this.events.push({ type: 'object' });
+      }
+      return;
+    }
+
     if (!this.input.abilityBuffered(ABILITY_BUFFER)) return;
+
+    // In aria, nello stato di massa sbagliato: niente abilità, ma lo diciamo.
+    const fresh = this.input.abilityBuffered(1 / 30);
+    if (this.role === 'ghisa' && !this.isHeavy && !this.slamming && fresh) {
+      this.input.consumeAbility();
+      this.events.push({ type: 'denied', need: 'heavy' });
+      return;
+    }
+    if (this.role === 'soffio' && !this.isLight && fresh) {
+      this.input.consumeAbility();
+      this.events.push({ type: 'denied', need: 'light' });
+      return;
+    }
 
     if (this.role === 'ghisa') {
       // Schianto: solo pesante e solo in aria.
@@ -280,9 +343,10 @@ export class Player {
     }
   }
 
-  private onLand(particles: Particles, fx: PlayerFx): void {
-    const impact = clamp(this.vy / this.tuning.maxFall, 0, 1);
+  private onLand(particles: Particles, fx: PlayerFx, impactVy: number): void {
+    const impact = clamp(impactVy / this.tuning.maxFall, 0, 1);
     this.squash = lerp(1, 0.66, impact);
+    this.events.push({ type: 'landed', vy: impactVy, slam: this.slamming });
 
     if (this.slamming) {
       this.slamming = false;
@@ -307,7 +371,7 @@ export class Player {
     }
   }
 
-  private moveX(dx: number, map: Tilemap): void {
+  private moveX(dx: number, map: Collider): void {
     if (dx === 0) return;
     const step = Math.sign(dx);
     let remaining = Math.abs(dx);
@@ -316,12 +380,22 @@ export class Player {
       remaining -= move;
       const nextX = this.x + step * move;
       const box: Rect = { x: nextX - HITBOX_W / 2, y: this.y - HITBOX_H, w: HITBOX_W, h: HITBOX_H };
-      if (map.overlapsSolid(box)) { this.vx = 0; this.dashTimer = 0; return; }
+      if (map.overlapsSolid(box)) {
+        // Contro una cassa, da terra: proviamo a spingerla. Chi è leggero
+        // non la smuove; chi è pesante la spinge più svelto.
+        const crate = this.onGround ? map.pushableAt(box) : null;
+        if (crate && crate.push(step * move, this.mass) !== 0 && !map.overlapsSolid(box)) {
+          this.x = nextX;
+          this.pushDrag = lerp(0.35, 0.75, this.mass);
+          continue;
+        }
+        this.vx = 0; this.dashTimer = 0; return;
+      }
       this.x = nextX;
     }
   }
 
-  private moveY(dy: number, map: Tilemap): void {
+  private moveY(dy: number, map: Collider): void {
     this.onGround = false;
     if (dy === 0) {
       const probe: Rect = { x: this.x - HITBOX_W / 2, y: this.y - HITBOX_H + 1, w: HITBOX_W, h: HITBOX_H };

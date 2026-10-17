@@ -1,10 +1,13 @@
 import { Container, Graphics, Text, TextStyle } from 'pixi.js';
-import { clamp, damp, lerp } from '../core/math';
+import { clamp, damp } from '../core/math';
 
 const FONT = '"Press Start 2P", monospace';
 
 const style = (size: number, color: number, alpha = 1): TextStyle =>
-  new TextStyle({ fontFamily: FONT, fontSize: size, fill: { color, alpha }, letterSpacing: 1 });
+  new TextStyle({
+    fontFamily: FONT, fontSize: size, fill: { color, alpha }, letterSpacing: 1,
+    lineHeight: Math.round(size * 1.8), align: 'center',
+  });
 
 /** Tastino disegnato: cornice + lettera, per la legenda dei comandi. */
 function keycap(label: string, color: number): Container {
@@ -27,16 +30,19 @@ export interface HudPlayerInfo {
 }
 
 /**
- * La barra della Bilancia: una sola quantità divisa fra i due. Le tacche
- * segnano le soglie oltre cui le abilità si accendono, così si capisce a
- * colpo d'occhio quanta massa manca per poter agire.
+ * La barra della Bilancia: la massa totale divisa fra GHISA (da sinistra),
+ * la Zavorra (al centro, quando è posata) e SOFFIO (da destra). Le tacche
+ * segnano le soglie; il nome di ciascuno si accende quando la sua abilità
+ * è disponibile (GHISA pesante, SOFFIO leggero).
  */
 class MassBar {
   readonly container = new Container();
   private readonly gfx = new Graphics();
   private readonly labelA: Text;
   private readonly labelB: Text;
-  private shown = 0.5;
+  private readonly labelBallast: Text;
+  private shownA = 0.5;
+  private shownBallast = 0;
   private flash = 0;
 
   static readonly W = 330;
@@ -46,7 +52,8 @@ class MassBar {
               nameA: string, nameB: string) {
     this.labelA = new Text({ text: nameA, style: style(8, colorA) });
     this.labelB = new Text({ text: nameB, style: style(8, colorB) });
-    this.container.addChild(this.gfx, this.labelA, this.labelB);
+    this.labelBallast = new Text({ text: 'ZAVORRA', style: style(7, 0xb8c0d6) });
+    this.container.addChild(this.gfx, this.labelA, this.labelB, this.labelBallast);
   }
 
   place(centerX: number, y: number): void {
@@ -55,33 +62,43 @@ class MassBar {
     this.labelB.position.set(MassBar.W - this.labelB.width, -14);
   }
 
-  update(dt: number, balance: number, heavyAt: number, lightAt: number, flash: number): void {
-    this.shown = damp(this.shown, balance, 18, dt);
+  update(dt: number, m1: number, ballast: number, m2: number,
+         heavyAt: number, lightAt: number, flash: number): void {
+    this.shownA = damp(this.shownA, m1, 18, dt);
+    this.shownBallast = damp(this.shownBallast, ballast, 18, dt);
     this.flash = Math.max(flash, this.flash - dt * 3);
 
     const { W, H } = MassBar;
-    const split = W * (1 - this.shown);   // porzione del giocatore 1
+    const a = W * this.shownA;
+    const b = a + W * this.shownBallast;
     const g = this.gfx;
     g.clear();
     g.roundRect(-2, -2, W + 4, H + 4, 4).fill({ color: 0x0b0d16, alpha: 0.72 });
-    g.rect(0, 0, split, H).fill({ color: this.colorA, alpha: 0.9 });
-    g.rect(split, 0, W - split, H).fill({ color: this.colorB, alpha: 0.9 });
-
-    // tacche delle soglie: a sinistra per P1, a destra per P2
-    for (const [t, color] of [[1 - heavyAt, this.colorA], [lightAt, this.colorA],
-                              [1 - lightAt, this.colorB], [heavyAt, this.colorB]] as const) {
-      g.rect(W * t - 0.5, -3, 1, H + 6).fill({ color, alpha: 0.28 });
+    g.rect(0, 0, a, H).fill({ color: this.colorA, alpha: 0.9 });
+    if (b - a > 0.5) {
+      g.rect(a, 0, b - a, H).fill({ color: 0x5b6378 });
+      for (let x = a + 2; x < b - 1; x += 5) g.rect(x, 2, 2, H - 4).fill({ color: 0x8b93a8, alpha: 0.6 });
     }
+    g.rect(b, 0, W - b, H).fill({ color: this.colorB, alpha: 0.9 });
 
-    // cursore centrale
-    g.rect(split - 1.5, -4, 3, H + 8).fill({ color: 0xf4f7ff, alpha: 0.95 });
+    // soglie: GHISA si misura da sinistra, SOFFIO da destra
+    for (const [x, color] of [[W * lightAt, this.colorA], [W * heavyAt, this.colorA],
+                              [W - W * lightAt, this.colorB], [W - W * heavyAt, this.colorB]] as const) {
+      g.rect(x - 0.5, -3, 1, H + 6).fill({ color, alpha: 0.28 });
+    }
+    g.rect(a - 1.5, -4, 3, H + 8).fill({ color: 0xf4f7ff, alpha: 0.95 });
+    if (b - a > 0.5) g.rect(b - 1.5, -4, 3, H + 8).fill({ color: 0xf4f7ff, alpha: 0.95 });
 
     if (this.flash > 0.01) {
       g.roundRect(-4, -4, W + 8, H + 8, 5)
         .stroke({ width: 2, color: 0xffffff, alpha: this.flash * 0.9 });
     }
-    this.labelA.alpha = lerp(0.45, 1, clamp((1 - this.shown - lightAt) / (heavyAt - lightAt), 0, 1));
-    this.labelB.alpha = lerp(0.45, 1, clamp((this.shown - lightAt) / (heavyAt - lightAt), 0, 1));
+
+    // nome acceso = abilità disponibile
+    this.labelA.alpha = m1 >= heavyAt ? 1 : 0.4;
+    this.labelB.alpha = m2 <= lightAt ? 1 : 0.4;
+    this.labelBallast.visible = this.shownBallast > 0.04;
+    this.labelBallast.position.set((a + b) / 2 - this.labelBallast.width / 2, H + 5);
   }
 }
 
@@ -96,6 +113,7 @@ export class Hud {
   private promptTarget = 0;
   private readonly legend = new Container();
   private readonly massBar: MassBar;
+  private readonly status: [Text, Text];
 
   constructor(
     private width: number,
@@ -121,9 +139,15 @@ export class Hud {
     );
     this.massBar.place(width / 2, 34);
 
+    this.status = [
+      new Text({ text: '', style: style(7, players[0]!.color) }),
+      new Text({ text: '', style: style(7, players[1]!.color) }),
+    ];
+
     this.buildLegend(players);
     this.container.addChild(
       this.levelText, this.gemText, this.legend, this.massBar.container, this.promptBox,
+      ...this.status,
     );
   }
 
@@ -153,20 +177,30 @@ export class Hud {
     if (this.promptText.text !== text) {
       this.promptText.text = text;
       const w = this.promptText.width + 28;
-      const h = 30;
+      const h = this.promptText.height + 16;
       this.promptBg.clear()
         .roundRect(0, 0, w, h, 6).fill({ color: 0x0b0d16, alpha: 0.82 })
         .roundRect(0.5, 0.5, w - 1, h - 1, 6).stroke({ width: 1, color: 0xfff2c4, alpha: 0.35 });
       this.promptText.position.set(14, (h - this.promptText.height) / 2);
-      this.promptBox.position.set((this.width - w) / 2, this.height - 84);
+      // In alto, sotto la barra della massa: in basso coprirebbe i personaggi,
+      // che in un platform stanno quasi sempre nella metà inferiore.
+      this.promptBox.position.set((this.width - w) / 2, 66);
     }
     this.promptTarget = 1;
   }
 
   hidePrompt(): void { this.promptTarget = 0; }
 
-  setMass(dt: number, balance: number, heavyAt: number, lightAt: number, flash: number): void {
-    this.massBar.update(dt, balance, heavyAt, lightAt, flash);
+  setMass(dt: number, m1: number, ballast: number, m2: number,
+          heavyAt: number, lightAt: number, flash: number): void {
+    this.massBar.update(dt, m1, ballast, m2, heavyAt, lightAt, flash);
+  }
+
+  /** Riga di stato dell'oggetto di ciascun giocatore, sopra la legenda. */
+  setObjectStatus(i: 0 | 1, text: string): void {
+    const t = this.status[i];
+    if (t.text !== text) t.text = text;
+    t.position.set(i === 0 ? 16 : this.width - t.width - 16, this.height - 44);
   }
 
   update(dt: number): void {

@@ -10,6 +10,9 @@ export interface SplitConfig {
   maxMergedZoom: number;
   /** Margine (px schermo) tra i personaggi e il bordo quando lo schermo è unico. */
   margin: number;
+  /** Margine verticale: più ampio, perché in alto c'è l'HUD e lo sprite
+   *  sporge sopra il punto inseguito dalla camera. */
+  marginY: number;
   /** Secondi dell'animazione di apertura/chiusura. */
   transition: number;
 }
@@ -19,6 +22,7 @@ export const DEFAULT_SPLIT: SplitConfig = {
   minMergedZoom: 2.05,
   maxMergedZoom: 3,
   margin: 190,
+  marginY: 270,
   transition: 0.26,
 };
 
@@ -112,7 +116,7 @@ export class SplitScreen {
     // Zoom necessario per tenere entrambi dentro una sola inquadratura.
     const fitZoom = Math.min(
       (this.width - cfg.margin) / Math.max(dx, 1),
-      (this.height - cfg.margin * 0.62) / Math.max(dy, 1),
+      (this.height - cfg.marginY) / Math.max(dy, 1),
       cfg.maxMergedZoom,
     );
 

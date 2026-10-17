@@ -4,7 +4,24 @@ import { clamp, damp, easeOutCubic, rectsOverlap, type Rect } from '../core/math
 import { TILE } from '../render/assets';
 import type { Particles } from '../render/particles';
 import { Cell, type Tilemap } from './tilemap';
+import { MassSystem } from './mass';
 import type { Player } from './player';
+
+/** Qualsiasi cosa che pesa e può stare su una piastra. */
+export interface Weight { readonly box: Rect; readonly mass: number }
+
+/** Raggruppa i tile di un marker in strisce orizzontali contigue. */
+export function horizontalRuns(tiles: readonly { tx: number; ty: number }[]): { tx: number; ty: number }[][] {
+  const sorted = [...tiles].sort((a, b) => a.ty - b.ty || a.tx - b.tx);
+  const runs: { tx: number; ty: number }[][] = [];
+  for (const t of sorted) {
+    const last = runs[runs.length - 1];
+    const prev = last?.[last.length - 1];
+    if (last && prev && prev.ty === t.ty && prev.tx === t.tx - 1) last.push(t);
+    else runs.push([t]);
+  }
+  return runs;
+}
 
 /** Converte i marker del livello (centro-basso del tile) in coordinate tile. */
 export const toTile = (p: { x: number; y: number }): { tx: number; ty: number } => ({
@@ -24,9 +41,10 @@ export function boundsOf(tiles: readonly { tx: number; ty: number }[]): Rect {
 }
 
 /* ------------------------------------------------------------------ *
- * PIASTRA PESANTE — si abbassa solo sotto un corpo abbastanza pesante.
- * È il modo più diretto di rendere leggibile la Bilancia: se la piastra
- * non scende, uno dei due deve cedere massa all'altro.
+ * PIASTRA PESANTE — si abbassa quando il peso TOTALE che ci sta sopra
+ * raggiunge la soglia: un giocatore pesante, la Zavorra carica, due casse,
+ * oppure una cassa più un giocatore leggero. Scende un po' anche sotto
+ * soglia, così si vede quanto manca.
  * ------------------------------------------------------------------ */
 export class HeavyPlate {
   readonly container = new Container();
@@ -38,6 +56,8 @@ export class HeavyPlate {
   private hint = 0;
   /** Qualcuno ci sta sopra, ma non pesa abbastanza. */
   needsMoreMass = false;
+  /** Peso sopra la piastra rispetto alla soglia (1 = basta). */
+  load = 0;
 
   constructor(tiles: readonly { tx: number; ty: number }[], private readonly color: number) {
     this.container.addChild(this.gfx);
@@ -45,18 +65,20 @@ export class HeavyPlate {
     this.bounds = { x: b.x, y: b.y + TILE - 6, w: b.w, h: 6 };
   }
 
-  update(dt: number, players: readonly Player[]): boolean {
+  update(dt: number, weights: readonly Weight[]): boolean {
     const zone: Rect = { x: this.bounds.x, y: this.bounds.y - 10, w: this.bounds.w, h: 16 };
-    let heavyOn = false;
+    let total = 0;
     let anyOn = false;
-    for (const p of players) {
-      if (!rectsOverlap(p.hitbox, zone)) continue;
+    for (const w of weights) {
+      if (!rectsOverlap(w.box, zone)) continue;
       anyOn = true;
-      if (p.isHeavy) heavyOn = true;
+      total += w.mass;
     }
+    const heavyOn = total >= MassSystem.HEAVY - 1e-6;
+    this.load = clamp(total / MassSystem.HEAVY, 0, 1);
     this.active = heavyOn;
     this.needsMoreMass = anyOn && !heavyOn;
-    this.press = damp(this.press, heavyOn ? 1 : 0, 16, dt);
+    this.press = damp(this.press, heavyOn ? 1 : this.load * 0.45, 16, dt);
     // Se qualcuno ci sta sopra ma è troppo leggero, la piastra "trema".
     this.hint = damp(this.hint, anyOn && !heavyOn ? 1 : 0, 10, dt);
     return this.active;

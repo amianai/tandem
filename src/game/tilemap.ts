@@ -16,6 +16,12 @@ export interface LevelSource {
   /** Righe ASCII; vengono paddate automaticamente alla riga più lunga. */
   readonly rows: readonly string[];
   readonly legend?: Readonly<Record<string, Cell>>;
+  /** Piastra (minuscola) -> cancello (maiuscola) che apre. */
+  readonly links?: Readonly<Record<string, string>>;
+  /** Cancelli che, una volta aperti, restano aperti. */
+  readonly latching?: string;
+  /** Suggerimento mostrato quando un giocatore è vicino al marker. */
+  readonly hints?: Readonly<Record<string, string>>;
 }
 
 const DEFAULT_LEGEND: Record<string, Cell> = {

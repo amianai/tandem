@@ -2,6 +2,7 @@ import { Application } from 'pixi.js';
 import { Loop } from './core/loop';
 import { loadAssets } from './render/assets';
 import { Game } from './game/game';
+import { LEVELS } from './game/levels';
 
 /** Risoluzione interna fissa: l'inquadratura è identica su ogni schermo. */
 const VIEW_W = 1280;
@@ -33,7 +34,17 @@ async function boot(): Promise<void> {
   } catch { /* nessun font custom: si usa il monospace di sistema */ }
 
   const sheets = await loadAssets();
-  const game = new Game(app.renderer, sheets, VIEW_W, VIEW_H);
+
+  // Livello da URL (?level=1), Shift+N passa al successivo.
+  const params = new URLSearchParams(location.search);
+  const levelIndex = Math.min(Math.max(Number(params.get('level')) || 0, 0), LEVELS.length - 1);
+  const game = new Game(app.renderer, sheets, VIEW_W, VIEW_H, LEVELS[levelIndex]!);
+  const onLevelKey = (e: KeyboardEvent): void => {
+    if (e.code !== 'KeyN' || !e.shiftKey) return;
+    params.set('level', String((levelIndex + 1) % LEVELS.length));
+    location.search = params.toString();
+  };
+  window.addEventListener('keydown', onLevelKey);
 
   const fit = (): void => {
     const scale = Math.min(window.innerWidth / VIEW_W, window.innerHeight / VIEW_H);
@@ -66,6 +77,7 @@ async function boot(): Promise<void> {
       loop.stop();
       game.destroy();
       window.removeEventListener('resize', fit);
+      window.removeEventListener('keydown', onLevelKey);
       app.destroy(true, { children: true, texture: true });
       mount.replaceChildren();
     });

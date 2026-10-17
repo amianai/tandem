@@ -8,15 +8,25 @@ import { Particles } from '../render/particles';
 import { SplitScreen } from '../render/splitScreen';
 import { DebugOverlay } from '../ui/debug';
 import { Hud } from '../ui/hud';
-import { FragileFloor, Gate, HeavyPlate, toTile, Updraft } from './elements';
-import { SANDBOX } from './levels';
+import {
+  FragileFloor, Gate, HeavyPlate, horizontalRuns, toTile, Updraft, type Weight,
+} from './elements';
 import { MassSystem } from './mass';
+import { Ballast, Bellows, Crate } from './objects';
+import { Physics } from './physics';
 import { Pickups } from './pickups';
 import { Player } from './player';
-import { buildTileLayer, Tilemap } from './tilemap';
+import { buildTileLayer, Tilemap, type LevelSource } from './tilemap';
 
 const P1_COLOR = 0x5eead4;   // GHISA
 const P2_COLOR = 0xff6fb5;   // SOFFIO
+const GATE_COLOR = 0xffc75a;
+
+/** Distanza (px) entro cui si riprende un oggetto posato. */
+const PICKUP_RANGE_X = 22;
+const PICKUP_RANGE_Y = 20;
+/** Distanza entro cui compare il suggerimento di una stazione. */
+const HINT_RANGE = 10 * TILE;
 
 export class Game {
   readonly stage = new Container();
@@ -28,6 +38,7 @@ export class Game {
   private readonly chord: ChordDetector;
 
   private readonly map: Tilemap;
+  private readonly physics: Physics;
   private readonly background: Background;
   private readonly particles = new Particles();
   private readonly players: [Player, Player];
@@ -41,14 +52,18 @@ export class Game {
   private readonly dustTexture: Texture;
 
   private readonly mass = new MassSystem();
-  private readonly platesG: HeavyPlate[];
-  private readonly plateR: HeavyPlate | null;
-  private readonly gateG: Gate | null;
-  private readonly gateH: Gate | null;
+  private readonly ballast = new Ballast();
+  private readonly bellows = new Bellows();
+  private readonly crates: { crate: Crate; spawn: { x: number; y: number } }[] = [];
+  private readonly plates: { plate: HeavyPlate; gate: string }[] = [];
+  private readonly gates = new Map<string, Gate>();
   private readonly fragile: FragileFloor | null;
   private readonly updraft: Updraft | null;
   private readonly goal: Rect | null;
+  private readonly hints: { x: number; y: number; text: string }[] = [];
 
+  /** Messaggio breve (rifiuti, conferme): ha la precedenza sui suggerimenti. */
+  private flash: { text: string; until: number } | null = null;
   private time = 0;
   private finished = false;
   private readonly detachInput: () => void;
@@ -58,6 +73,7 @@ export class Game {
     sheets: Sheets,
     private readonly viewWidth: number,
     private readonly viewHeight: number,
+    readonly level: LevelSource,
   ) {
     this.sparkTexture = sheets.particles['star_08']!;
     this.dustTexture = sheets.particles['smoke_08']!;
@@ -67,32 +83,46 @@ export class Game {
     this.chord = new ChordDetector(this.input1, this.input2);
     this.detachInput = this.keyboard.install();
 
-    this.map = new Tilemap(SANDBOX);
+    this.map = new Tilemap(level);
+    this.physics = new Physics(this.map);
     this.background = new Background(this.map.pixelWidth, this.map.pixelHeight);
 
-    /* --- elementi guidati dalla Bilancia ------------------------------ */
+    /* --- elementi del livello ----------------------------------------- */
     const tilesOf = (ch: string) => (this.map.markers.get(ch) ?? []).map(toTile);
+    const links = level.links ?? {};
 
-    this.platesG = [...tilesOf('p'), ...tilesOf('q')].map((t) => new HeavyPlate([t], 0xffc75a));
-    const rTiles = tilesOf('r');
-    this.plateR = rTiles.length ? new HeavyPlate(rTiles, 0xffc75a) : null;
-
-    const gTiles = tilesOf('G');
-    this.gateG = gTiles.length ? new Gate(this.map, gTiles, 0xffc75a) : null;
-    const hTiles = tilesOf('H');
-    this.gateH = hTiles.length ? new Gate(this.map, hTiles, 0xffc75a, true) : null;
+    for (const gateChar of new Set(Object.values(links))) {
+      const tiles = tilesOf(gateChar);
+      if (tiles.length) {
+        const latch = (level.latching ?? '').includes(gateChar);
+        this.gates.set(gateChar, new Gate(this.map, tiles, GATE_COLOR, latch));
+      }
+    }
+    for (const [plateChar, gateChar] of Object.entries(links)) {
+      for (const run of horizontalRuns(tilesOf(plateChar))) {
+        this.plates.push({ plate: new HeavyPlate(run, GATE_COLOR), gate: gateChar });
+      }
+    }
 
     const xTiles = tilesOf('X');
     this.fragile = xTiles.length ? new FragileFloor(this.map, xTiles) : null;
-
     const uTiles = tilesOf('U');
     this.updraft = uTiles.length ? new Updraft(uTiles, 0x9bd2ff) : null;
 
     const flag = this.map.markers.get('F')?.[0];
     this.goal = flag ? { x: flag.x - 10, y: flag.y - 22, w: 20, h: 22 } : null;
 
+    for (const [ch, text] of Object.entries(level.hints ?? {})) {
+      for (const p of this.map.markers.get(ch) ?? []) this.hints.push({ x: p.x, y: p.y, text });
+    }
+
     /* --- terreno ------------------------------------------------------ */
-    const tileLayer = buildTileLayer(this.map, sheets);
+    // Cancelli e solaio fragile si disegnano da soli e possono sparire:
+    // se finissero anche nel terreno cotto resterebbero visibili da aperti.
+    const dynamicTiles = new Set(
+      [...Object.values(links).flatMap((c) => tilesOf(c)), ...xTiles].map((t) => `${t.tx},${t.ty}`),
+    );
+    const tileLayer = buildTileLayer(this.map, sheets, dynamicTiles);
     const baked = RenderTexture.create({
       width: this.map.pixelWidth, height: this.map.pixelHeight, resolution: 1,
     });
@@ -102,6 +132,13 @@ export class Game {
     terrain.label = 'terrain';
 
     this.pickups = new Pickups(this.map.markers.get('*') ?? [], sheets.terrain[TILES.gem]!);
+
+    for (const p of this.map.markers.get('C') ?? []) {
+      const crate = new Crate();
+      crate.placeAt(p.x, p.y);
+      this.physics.add(crate);
+      this.crates.push({ crate, spawn: { x: p.x, y: p.y } });
+    }
 
     const framesFor = (idx: readonly number[]) => idx.map((i) => sheets.characters[i]!);
     this.players = [
@@ -118,21 +155,23 @@ export class Game {
 
     this.world.addChild(this.background.container, terrain);
     if (this.updraft) this.world.addChild(this.updraft.container);
-    if (this.gateG) this.world.addChild(this.gateG.container);
-    if (this.gateH) this.world.addChild(this.gateH.container);
+    for (const g of this.gates.values()) this.world.addChild(g.container);
     if (this.fragile) this.world.addChild(this.fragile.container);
-    for (const p of this.platesG) this.world.addChild(p.container);
-    if (this.plateR) this.world.addChild(this.plateR.container);
+    for (const { plate } of this.plates) this.world.addChild(plate.container);
+    this.world.addChild(this.pickups.container);
+    for (const { crate } of this.crates) this.world.addChild(crate.view);
     this.world.addChild(
-      this.pickups.container,
+      this.bellows.view,
       this.players[0].view,
       this.players[1].view,
+      // la Zavorra in spalla va sopra GHISA
+      this.ballast.view,
       this.particles.container,
     );
 
     /* --- schermo ------------------------------------------------------ */
     this.split = new SplitScreen(viewWidth, viewHeight, 1);
-    this.hud = new Hud(viewWidth, viewHeight, SANDBOX.name, this.hudInfo());
+    this.hud = new Hud(viewWidth, viewHeight, level.name, this.hudInfo());
     this.debug.container.position.set(viewWidth - 250, 12);
     this.stage.addChild(this.split.root, this.hud.container, this.debug.container);
 
@@ -142,6 +181,7 @@ export class Game {
       { w: this.map.pixelWidth, h: this.map.pixelHeight },
     );
     this.hud.setGems(0, this.pickups.total);
+    this.carryObjects();
 
     window.addEventListener('keydown', this.onSystemKey);
   }
@@ -160,6 +200,10 @@ export class Game {
     }
   };
 
+  private say(text: string, seconds = 1.8): void {
+    this.flash = { text, until: this.time + seconds };
+  }
+
   /* ------------------------------------------------------------------ */
 
   fixedUpdate(dt: number): void {
@@ -169,18 +213,12 @@ export class Game {
     // 1. la Bilancia decide chi è pesante e chi è leggero
     if (this.mass.update(dt, this.input1, this.input2, this.chord)) {
       this.shake.add(0.3);
-      for (const p of this.players) {
-        this.particles.emit({
-          texture: this.sparkTexture, x: p.x, y: p.y - 8, count: 18,
-          speed: [50, 200], life: [0.25, 0.6], scale: [0.08, 0.2],
-          tint: p.tint, additive: true, drag: 3,
-        });
-      }
+      for (const p of this.players) this.burst(p.x, p.y - 8, p.tint, 18);
     }
-    this.players[0].mass = this.mass.massP1;
-    this.players[1].mass = this.mass.massP2;
+    this.players[0].mass = this.mass.m1;
+    this.players[1].mass = this.mass.m2;
 
-    // 2. le correnti agiscono prima del passo fisico, così si integrano
+    // 2. le correnti agiscono prima del passo fisico
     let liftedTooHeavy = false;
     if (this.updraft) {
       for (const p of this.players) {
@@ -188,11 +226,18 @@ export class Game {
       }
     }
 
-    // 3. fisica dei personaggi
+    // 3. personaggi
+    this.physics.actors = this.players.map((p) => p.hitbox);
+    const onBellows = this.players.map((p) =>
+      this.bellows.state === 'placed' && this.physics.standsOn(p.hitbox, this.bellows));
     const fx = { dust: this.dustTexture, spark: this.sparkTexture };
     const impacts: { x: number; y: number }[] = [];
-    for (const p of this.players) {
-      p.update(dt, this.map, this.particles, fx);
+
+    this.players.forEach((p, i) => {
+      p.update(dt, this.physics, this.particles, fx);
+      this.physics.actors[i] = p.hitbox;
+      this.handleEvents(p, onBellows[i]!);
+
       const impact = p.takeImpact();
       if (impact) {
         impacts.push(impact);
@@ -201,32 +246,55 @@ export class Game {
           impact.x, impact.y + 8, 42, this.particles, this.sparkTexture,
         ) ?? 0;
         if (broken > 0) this.shake.add(0.25);
+        for (const { crate } of this.crates) {
+          const d = Math.abs(crate.x - impact.x);
+          if (d < 64 && Math.abs(crate.y - impact.y) < 24) crate.shove(impact.x, 1 - d / 64);
+        }
       }
       if (p.y > this.map.pixelHeight + 48) {
         p.respawn(this.particles, this.sparkTexture);
         this.shake.add(0.2);
       }
-    }
+    });
 
-    // 4. piastre e cancelli
+    // 4. corpi
+    for (const { crate, spawn } of this.crates) {
+      crate.update(dt, this.physics);
+      if (crate.y > this.map.pixelHeight + 48) crate.placeAt(spawn.x, spawn.y);
+    }
+    this.ballast.update(dt, this.physics);
+    if (this.ballast.state === 'placed' && this.ballast.y > this.map.pixelHeight + 48) {
+      this.pickUpBallast();
+      this.say('LA ZAVORRA È CADUTA: TORNA A GHISA');
+    }
+    this.bellows.update(dt, this.physics);
+    if (this.bellows.state === 'placed' && this.bellows.y > this.map.pixelHeight + 48) {
+      this.bellows.startRecall();
+      this.physics.remove(this.bellows);
+    }
+    if (this.bellows.state === 'recalling') {
+      const s = this.players[1];
+      if (this.bellows.updateRecall(dt, s.x, s.y - 3)) this.bellows.state = 'carried';
+    }
+    this.carryObjects();
+
+    // 5. piastre e cancelli: conta il peso totale appoggiato
+    const weights: Weight[] = [
+      ...this.players.map((p) => ({ box: p.hitbox, mass: p.mass })),
+      ...this.crates.map(({ crate }) => ({ box: crate.box, mass: crate.mass })),
+    ];
+    if (this.ballast.state === 'placed') weights.push({ box: this.ballast.box, mass: this.ballast.mass });
+
     let needsMass = false;
-    let openG = false;
-    for (const plate of this.platesG) {
-      if (plate.update(dt, this.players)) openG = true;
+    const open = new Map<string, boolean>();
+    for (const { plate, gate } of this.plates) {
+      if (plate.update(dt, weights)) open.set(gate, true);
       if (plate.needsMoreMass) needsMass = true;
     }
-    this.gateG?.update(dt, openG);
-
-    let openH = false;
-    if (this.plateR) {
-      openH = this.plateR.update(dt, this.players);
-      if (this.plateR.needsMoreMass) needsMass = true;
-    }
-    this.gateH?.update(dt, openH);
-
+    for (const [ch, gate] of this.gates) gate.update(dt, open.get(ch) ?? false);
     this.fragile?.update(dt, impacts);
 
-    // 5. raccolta e traguardo
+    // 6. raccolta e traguardo
     const boxes: Rect[] = this.players.map((p) => p.hitbox);
     if (this.pickups.update(dt, boxes, this.particles, this.sparkTexture) > 0) {
       this.hud.setGems(this.pickups.collected, this.pickups.total);
@@ -235,42 +303,185 @@ export class Game {
     if (!this.finished && this.goal && boxes.every((b) => rectsOverlap(b, this.goal!))) {
       this.finished = true;
       this.shake.add(0.5);
-      for (const p of this.players) {
-        this.particles.emit({
-          texture: this.sparkTexture, x: p.x, y: p.y - 10, count: 40,
-          speed: [60, 300], life: [0.6, 1.4], scale: [0.1, 0.24],
-          tint: p.tint, additive: true, gravity: 220, drag: 1.6,
-        });
-      }
+      for (const p of this.players) this.burst(p.x, p.y - 10, p.tint, 40);
     }
 
     this.updatePrompt(needsMass, liftedTooHeavy);
     this.particles.update(dt);
   }
 
-  private updatePrompt(needsMass: boolean, liftedTooHeavy: boolean): void {
-    if (this.finished) {
-      this.hud.showPrompt('INSIEME. FINE DEL LIVELLO.');
-    } else if (needsMass) {
-      this.hud.showPrompt('TROPPO LEGGERO PER LA PIASTRA');
-    } else if (liftedTooHeavy) {
-      this.hud.showPrompt('TROPPO PESANTE PER LA CORRENTE');
-    } else {
-      this.hud.hidePrompt();
+  /* --- eventi dei personaggi ----------------------------------------- */
+
+  private handleEvents(p: Player, wasOnBellows: boolean): void {
+    for (const e of p.events.splice(0)) {
+      switch (e.type) {
+        case 'jumped':
+          // Saltare da un Mantice carico: lancio con tutta l'energia.
+          if (wasOnBellows && this.bellows.charge > 0.05) {
+            const h = this.bellows.release(p.mass);
+            p.launch(h);
+            this.shake.add(0.3);
+            this.burst(this.bellows.x, this.bellows.y - 6, P2_COLOR, 26);
+          }
+          break;
+        case 'landed':
+          if (this.bellows.state === 'placed' && this.physics.standsOn(p.hitbox, this.bellows)) {
+            const added = this.bellows.absorb(p.mass, e.vy, e.slam);
+            if (added > 0.05) {
+              this.burst(this.bellows.x, this.bellows.y - 6, P2_COLOR, Math.round(8 + added * 24));
+              if (this.bellows.charge >= 0.95) this.say('MANTICE CARICO: CHI È LEGGERO CI SALTI SOPRA');
+            }
+          }
+          break;
+        case 'object':
+          if (p.role === 'ghisa') this.useBallast(p); else this.useBellows(p);
+          break;
+        case 'denied':
+          this.say(e.need === 'heavy'
+            ? 'SCHIANTO: GHISA DEVE ESSERE PESANTE'
+            : 'SCATTO: SOFFIO DEVE ESSERE LEGGERO');
+          this.burst(p.x, p.y - 10, 0x8b93a8, 6);
+          break;
+      }
     }
   }
 
+  /* --- oggetti -------------------------------------------------------- */
+
+  private useBallast(p: Player): void {
+    const b = this.ballast;
+    if (b.state === 'carried') {
+      const spot = this.findSpot(p, b.w, b.h);
+      if (!spot) { this.say('NON C’È SPAZIO PER POSARE LA ZAVORRA'); return; }
+      b.state = 'placed';
+      b.placeAt(spot.x, spot.y);
+      b.mass = this.mass.depositBallast();
+      b.dropped();
+      this.physics.add(b);
+      this.shake.add(0.12 + b.mass * 0.3);
+      this.burst(spot.x, spot.y - 4, P1_COLOR, 14);
+      if (b.mass < 0.05) this.say('ZAVORRA VUOTA: GHISA ERA GIÀ LEGGERO');
+      return;
+    }
+    if (this.near(p, b)) { this.pickUpBallast(); return; }
+    this.say('LA ZAVORRA PESA TROPPO PER RICHIAMARLA:\nTORNA A PRENDERLA');
+  }
+
+  private pickUpBallast(): void {
+    this.physics.remove(this.ballast);
+    this.mass.withdrawBallast();
+    this.ballast.state = 'carried';
+    this.ballast.mass = 0;
+    this.carryObjects();
+  }
+
+  private useBellows(p: Player): void {
+    const m = this.bellows;
+    if (m.state === 'recalling') return;
+    if (m.state === 'carried') {
+      const spot = this.findSpot(p, m.w, m.h);
+      if (!spot) { this.say('NON C’È SPAZIO PER POSARE IL MANTICE'); return; }
+      m.state = 'placed';
+      m.placeAt(spot.x, spot.y);
+      m.charge = 0;
+      this.physics.add(m);
+      this.burst(spot.x, spot.y - 4, P2_COLOR, 10);
+      return;
+    }
+    this.physics.remove(m);
+    if (this.near(p, m)) {
+      m.state = 'carried';
+      m.charge = 0;
+      this.carryObjects();
+    } else {
+      // È leggero: SOFFIO lo richiama da qualsiasi distanza, ma perde la carica.
+      m.startRecall();
+    }
+  }
+
+  private near(p: Player, o: { x: number; y: number }): boolean {
+    return Math.abs(p.x - o.x) <= PICKUP_RANGE_X && Math.abs(p.y - o.y) <= PICKUP_RANGE_Y;
+  }
+
+  /** Davanti al personaggio se c'è posto, altrimenti dietro. */
+  private findSpot(p: Player, w: number, h: number): { x: number; y: number } | null {
+    const facing = p.facingDir;
+    for (const dir of [facing, -facing]) {
+      const x = Math.round(p.x + dir * (6 + w / 2 + 1));
+      const box: Rect = { x: x - w / 2, y: p.y - h, w, h };
+      // deve poggiare su qualcosa, non restare sospeso sul vuoto
+      const below: Rect = { x: box.x, y: p.y, w, h: 2 };
+      if (this.physics.isFree(box) && this.physics.overlapsSolid(below)) return { x, y: p.y };
+    }
+    return null;
+  }
+
+  /** Gli oggetti trasportati seguono chi li porta. */
+  private carryObjects(): void {
+    const [g, s] = this.players;
+    if (this.ballast.state === 'carried') this.ballast.carryAt(g.x, g.y, g.facingDir);
+    if (this.bellows.state === 'carried') this.bellows.carryAt(s.x, s.y, s.facingDir);
+  }
+
+  private burst(x: number, y: number, tint: number, count: number): void {
+    this.particles.emit({
+      texture: this.sparkTexture, x, y, count,
+      speed: [50, 200], life: [0.25, 0.6], scale: [0.08, 0.2],
+      tint, additive: true, drag: 3,
+    });
+  }
+
+  /* --- messaggi ------------------------------------------------------- */
+
+  private updatePrompt(needsMass: boolean, liftedTooHeavy: boolean): void {
+    if (this.flash && this.time > this.flash.until) this.flash = null;
+
+    let text: string | null = null;
+    if (this.finished) text = 'INSIEME. FINE DEL LIVELLO.';
+    else if (this.flash) text = this.flash.text;
+    else if (needsMass) text = 'PESO INSUFFICIENTE SULLA PIASTRA';
+    else if (liftedTooHeavy) text = 'TROPPO PESANTE PER LA CORRENTE';
+    else text = this.nearestHint();
+
+    if (text) this.hud.showPrompt(text); else this.hud.hidePrompt();
+
+    const b = this.ballast;
+    this.hud.setObjectStatus(0, b.state === 'carried'
+      ? 'ZAVORRA IN SPALLA'
+      : `ZAVORRA POSATA  ${Math.round(b.mass * 100)}%`);
+    const m = this.bellows;
+    this.hud.setObjectStatus(1, m.state === 'carried'
+      ? 'MANTICE IN MANO'
+      : m.state === 'recalling' ? 'MANTICE IN VOLO'
+        : `MANTICE POSATO  CARICA ${Math.round(m.charge * 100)}%`);
+  }
+
+  private nearestHint(): string | null {
+    let best: string | null = null;
+    let bestD = HINT_RANGE;
+    for (const h of this.hints) {
+      for (const p of this.players) {
+        const d = Math.hypot(p.x - h.x, p.y - h.y);
+        if (d < bestD) { bestD = d; best = h.text; }
+      }
+    }
+    return best;
+  }
+
+  /* --- disegno -------------------------------------------------------- */
+
   render(alpha: number, frameDelta: number, fps: number): void {
     for (const p of this.players) p.draw(alpha, this.time);
-    for (const plate of this.platesG) plate.draw(this.time);
-    this.plateR?.draw(this.time);
-    this.gateG?.draw(this.time);
-    this.gateH?.draw(this.time);
+    for (const { plate } of this.plates) plate.draw(this.time);
+    for (const g of this.gates.values()) g.draw(this.time);
     this.fragile?.draw(this.time);
     this.updraft?.draw(this.time, this.particles, this.sparkTexture, frameDelta);
+    for (const { crate } of this.crates) crate.draw(alpha);
+    this.ballast.draw(alpha, this.time);
+    this.bellows.draw(alpha, this.time);
 
     this.hud.setMass(
-      frameDelta, this.mass.value,
+      frameDelta, this.mass.m1, this.mass.ballast, this.mass.m2,
       MassSystem.HEAVY, MassSystem.LIGHT, this.mass.invertFlash,
     );
     this.hud.update(frameDelta);
@@ -298,7 +509,7 @@ export class Game {
       camZoom: this.split.camA.zoom,
       players: this.players.map((p) => ({ vx: p.vx, vy: p.vy, onGround: p.onGround })),
       heldKeys: this.keyboard.heldCount,
-      mass: this.mass.value,
+      mass: this.mass.m2,
     });
   }
 
@@ -312,12 +523,23 @@ export class Game {
     renderer.render({ container: this.stage });
   }
 
+  /** Solo in sviluppo: comandi rapidi dalla console del browser. */
   devHandle() {
     return {
       game: this as unknown as Record<string, unknown>,
       teleport: (who: 0 | 1, x: number, y: number): void => { this.players[who].placeAt(x, y); },
+      /** Imposta le masse dei due giocatori (la Zavorra resta com'è). */
+      setMass: (m1: number): void => {
+        const pool = 1 - this.mass.ballast;
+        this.mass.m1 = Math.min(Math.max(m1, MassSystem.MIN), pool - MassSystem.MIN);
+        this.mass.m2 = pool - this.mass.m1;
+      },
       players: this.players,
       mass: this.mass,
+      physics: this.physics,
+      ballast: this.ballast,
+      bellows: this.bellows,
+      crates: this.crates.map((c) => c.crate),
       split: this.split,
       map: this.map,
     };
