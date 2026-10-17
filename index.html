@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>TANDEM — prototipo</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet" />
+  <style>
+    :root { --bg: #0b0d16; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; background: var(--bg); overflow: hidden; }
+    body { display: grid; place-items: center; font-family: "Press Start 2P", monospace; }
+    #stage { position: relative; line-height: 0; }
+    canvas { display: block; image-rendering: pixelated; }
+    #boot {
+      position: fixed; inset: 0; display: grid; place-items: center;
+      color: #7d8cc4; font-size: 10px; letter-spacing: 1px; background: var(--bg);
+      transition: opacity .4s ease; z-index: 10;
+    }
+    #boot.hidden { opacity: 0; pointer-events: none; }
+  </style>
+</head>
+<body>
+  <div id="stage"></div>
+  <div id="boot">CARICAMENTO…</div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

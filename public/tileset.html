@@ -1,0 +1,25 @@
+<!doctype html><html><head><meta charset="utf-8"><title>tileset</title>
+<style>body{background:#11142b;color:#cfd8ff;font:11px monospace;margin:0;padding:8px}canvas{image-rendering:pixelated}</style>
+</head><body><canvas id="c"></canvas>
+<script>
+const SCALE = 3, TILE = 18, COLS = 20;
+const img = new Image();
+img.src = '/assets/tiles/terrain.png';
+img.onload = () => {
+  const rows = img.height / TILE;
+  const c = document.getElementById('c');
+  const cell = TILE * SCALE;
+  c.width = COLS * cell; c.height = rows * cell;
+  const x = c.getContext('2d');
+  x.imageSmoothingEnabled = false;
+  x.fillStyle = '#11142b'; x.fillRect(0,0,c.width,c.height);
+  x.drawImage(img, 0, 0, c.width, c.height);
+  x.font = '10px monospace';
+  for (let r = 0; r < rows; r++) for (let q = 0; q < COLS; q++) {
+    const i = r * COLS + q;
+    x.strokeStyle = 'rgba(255,255,255,.18)'; x.strokeRect(q*cell, r*cell, cell, cell);
+    x.fillStyle = 'rgba(0,0,0,.65)'; x.fillRect(q*cell+1, r*cell+1, 20, 11);
+    x.fillStyle = '#9ef0c0'; x.fillText(i, q*cell+2, r*cell+10);
+  }
+};
+</script></body></html>

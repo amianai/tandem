@@ -1,0 +1,5 @@
+node_modules/
+dist/
+# pacchetti Kenney originali: si scaricano di nuovo, in git va solo public/assets
+vendor/
+.DS_Store

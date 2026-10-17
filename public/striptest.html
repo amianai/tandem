@@ -1,0 +1,69 @@
+<!doctype html><html><head><meta charset="utf-8"><title>strip test</title>
+<style>body{background:#2a2f5e;color:#cfd8ff;font:12px monospace;margin:0;padding:10px}
+canvas{image-rendering:pixelated;display:block;margin:2px 0 10px}</style>
+</head><body><div id="out"></div>
+<script>
+const SCALE = 4, TILE = 18, COLS = 20, LEN = 12, FIXED = 5;
+const strips = [
+  ['PIATTAFORMA grass 1 + 2*n + 3', [1,2,2,2,3]],
+  ['PIATTAFORMA grass 1 + 2*n + 0', [1,2,2,2,0]],
+  ['PIATTAFORMA dirt 121 + 122*n + 123', [121,122,122,122,123]],
+  ['PIATTAFORMA grass 0 + 2*n + 3', [0,2,2,2,3]],
+  ['PIATTAFORMA dirt 120 + 122*n + 123', [120,122,122,122,123]],
+  ['PIATTAFORMA beam 47 + 49*n + 50', [47,49,49,49,50]],
+  ['grass 0,1,2,3', [0,1,2,3]],
+  ['grass 1,2', [1,2]],
+  ['grass 1', [1]],
+  ['grass 2', [2]],
+  ['dirt 120..123', [120,121,122,123]],
+  ['dirt 121,122', [121,122]],
+  ['dirt 121', [121]],
+  ['dirt 122', [122]],
+  ['dirt 140..143', [140,141,142,143]],
+  ['dirt 141', [141]],
+  ['beam 47,48,49,50', [47,48,49,50]],
+  ['beam 48,49', [48,49]],
+  ['beam 49', [49]],
+];
+const vstrips = [
+  ['V dirt 122', [122]],
+  ['V dirt 122/142 alternati', [122,142]],
+  ['V dirt 142', [142]],
+  ['V grass 2 poi dirt 122', [2,122,122,122,122,122]],
+  ['V grass 2 poi 122/142', [2,122,142,122,142,122]],
+];
+const img = new Image();
+img.src = '/assets/tiles/terrain.png';
+img.onload = () => {
+  const out = document.getElementById('out');
+  for (const [name, seq] of strips) {
+    const label = document.createElement('div'); label.textContent = name; out.appendChild(label);
+    const c = document.createElement('canvas');
+    const len = name.startsWith('PIATTAFORMA') ? FIXED : LEN; c.width = len * TILE * SCALE; c.height = TILE * SCALE;
+    const x = c.getContext('2d'); x.imageSmoothingEnabled = false;
+    for (let i = 0; i < len; i++) {
+      const t = name.startsWith('PIATTAFORMA') ? seq[i] : seq[i % seq.length];
+      const sx = (t % COLS) * TILE, sy = Math.floor(t / COLS) * TILE;
+      x.drawImage(img, sx, sy, TILE, TILE, i*TILE*SCALE, 0, TILE*SCALE, TILE*SCALE);
+    }
+    out.appendChild(c);
+  }
+  const wrap = document.createElement('div');
+  wrap.style.display = 'flex'; wrap.style.gap = '18px'; wrap.style.marginTop = '14px';
+  for (const [name, seq] of vstrips) {
+    const box = document.createElement('div');
+    const label = document.createElement('div'); label.textContent = name; box.appendChild(label);
+    const c = document.createElement('canvas');
+    const n = 6;
+    c.width = TILE * SCALE; c.height = n * TILE * SCALE;
+    const x = c.getContext('2d'); x.imageSmoothingEnabled = false;
+    for (let i = 0; i < n; i++) {
+      const t = seq.length >= n ? seq[i] : seq[i % seq.length];
+      const sx = (t % COLS) * TILE, sy = Math.floor(t / COLS) * TILE;
+      x.drawImage(img, sx, sy, TILE, TILE, 0, i*TILE*SCALE, TILE*SCALE, TILE*SCALE);
+    }
+    box.appendChild(c); wrap.appendChild(box);
+  }
+  out.prepend(wrap);
+};
+</script></body></html>
