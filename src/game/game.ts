@@ -5,7 +5,9 @@ import { CHARS, TILE, TILES, type Sheets } from '../render/assets';
 import { Background } from '../render/background';
 import { Follower, Shake } from '../render/camera';
 import { Particles } from '../render/particles';
+import { RenderPipeline } from '../render/pipeline';
 import { SplitScreen } from '../render/splitScreen';
+import { ELEMENT_COLORS, P1_COLOR, P2_COLOR } from '../render/theme';
 import { DebugOverlay } from '../ui/debug';
 import { Hud } from '../ui/hud';
 import {
@@ -18,9 +20,7 @@ import { Pickups } from './pickups';
 import { Player } from './player';
 import { buildTileLayer, Tilemap, type LevelSource } from './tilemap';
 
-const P1_COLOR = 0x5eead4;   // GHISA
-const P2_COLOR = 0xff6fb5;   // SOFFIO
-const GATE_COLOR = 0xffc75a;
+const GATE_COLOR = ELEMENT_COLORS.signalOn;
 
 /** Distanza (px) entro cui si riprende un oggetto posato. */
 const PICKUP_RANGE_X = 22;
@@ -45,6 +45,7 @@ export class Game {
   private readonly followers: [Follower, Follower] = [new Follower(), new Follower()];
   private readonly shake = new Shake();
   private readonly split: SplitScreen;
+  private readonly gfx: RenderPipeline;
   private readonly hud: Hud;
   private readonly debug = new DebugOverlay();
   private readonly pickups: Pickups;
@@ -174,6 +175,12 @@ export class Game {
     this.hud = new Hud(viewWidth, viewHeight, level.name, this.hudInfo());
     this.debug.container.position.set(viewWidth - 250, 12);
     this.stage.addChild(this.split.root, this.hud.container, this.debug.container);
+    // Pipeline grafica: luci, effetti, scenografia, post-processing.
+    this.gfx = new RenderPipeline({
+      renderer, world: this.world, stage: this.stage, split: this.split,
+      background: this.background, particles: this.particles, map: this.map,
+      viewW: this.viewWidth, viewH: this.viewHeight,
+    });
 
     this.split.snap(
       { x: this.players[0].focusX, y: this.players[0].focusY },
@@ -514,13 +521,10 @@ export class Game {
   }
 
   present(renderer: Renderer): void {
-    this.split.render(renderer, this.world, {
-      shakeX: this.shake.offsetX,
-      shakeY: this.shake.offsetY,
-      shakeAngle: this.shake.angle,
-      beforePass: (cam) => this.background.applyTo(cam, this.viewWidth, this.viewHeight),
+    this.gfx.present(renderer, {
+      time: this.time, players: this.players, shake: this.shake,
+      invertFlash: this.mass.invertFlash, finished: this.finished, goal: this.goal,
     });
-    renderer.render({ container: this.stage });
   }
 
   /** Solo in sviluppo: comandi rapidi dalla console del browser. */

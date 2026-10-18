@@ -1,9 +1,10 @@
-import { Container, Sprite, type Texture } from 'pixi.js';
+import { Container, type Texture } from 'pixi.js';
 import { approach, clamp, damp, lerp, type Rect } from '../core/math';
 import type { PlayerInput } from '../core/input';
 import { MassSystem } from './mass';
 import type { Collider } from './physics';
 import type { Particles } from '../render/particles';
+import { CharacterArt } from '../render/art/characters';
 
 /**
  * I due ruoli sono fissi e specularmente inutili da soli:
@@ -100,20 +101,21 @@ export class Player {
   readonly events: PlayerEvent[] = [];
 
   readonly view = new Container();
-  private readonly sprite = new Sprite();
+  /** Il personaggio disegnato (rig procedurale, vedi render/art/characters.ts). */
+  private readonly art: CharacterArt;
   readonly spawn = { x: 0, y: 0 };
 
   constructor(
     readonly id: 0 | 1,
     readonly role: Role,
     private readonly input: PlayerInput,
-    private readonly frames: readonly Texture[],
+    /** Non più usati: i personaggi sono disegnati in codice. */
+    _frames: readonly Texture[],
     readonly tint: number,
     private readonly tuning: PlayerTuning = DEFAULT_TUNING,
   ) {
-    this.sprite.texture = frames[0]!;
-    this.sprite.anchor.set(0.5, 1);
-    this.view.addChild(this.sprite);
+    this.art = new CharacterArt(role);
+    this.view.addChild(this.art.view);
     this.view.label = `player${id}`;
   }
 
@@ -433,22 +435,10 @@ export class Player {
     const x = lerp(this.prevX, this.x, alpha);
     const y = lerp(this.prevY, this.y, alpha);
     this.view.position.set(Math.round(x), Math.round(y));
-
-    const moving = this.onGround && Math.abs(this.vx) > 24;
-    const frame = !this.onGround ? 1 : moving ? (Math.floor(this.runPhase) % 2) : 0;
-    this.sprite.texture = this.frames[frame]!;
-
-    // Il corpo racconta la massa: pesante = largo e basso, leggero = snello.
-    const massX = lerp(0.86, 1.18, this.mass);
-    const massY = lerp(1.16, 0.88, this.mass);
-    const air = this.onGround ? 0 : clamp(this.vy / 340, -1, 1);
-    const stretch = this.squash * (1 - air * 0.1);
-    const bob = moving ? Math.sin(this.runPhase * Math.PI) * 0.6 : Math.sin(time * 2.4) * 0.35;
-
-    this.sprite.scale.set(this.facing * massX * (2 - stretch), massY * stretch);
-    this.sprite.y = -bob;
-    this.sprite.rotation = this.isDashing
-      ? this.dashDir * 0.22
-      : clamp(this.vx / 900, -0.08, 0.08);
+    this.art.update({
+      x, y, vx: this.vx, vy: this.vy, onGround: this.onGround, facing: this.facing,
+      mass: this.mass, squash: this.squash, runPhase: this.runPhase,
+      slamming: this.slamming, dashing: this.dashTimer > 0, gliding: this.gliding,
+    }, time);
   }
 }

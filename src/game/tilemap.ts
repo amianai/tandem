@@ -1,5 +1,6 @@
 import { Container, Sprite } from 'pixi.js';
-import { pickTile, TILE, TILES, type Sheets } from '../render/assets';
+import { TILE, type Sheets } from '../render/assets';
+import { paintTerrain } from '../render/art/terrain';
 import type { Rect } from '../core/math';
 
 export const enum Cell {
@@ -112,33 +113,13 @@ export class Tilemap {
 }
 
 /**
- * Costruisce il layer grafico dei tile. Sceglie l'aspetto in base ai vicini
- * (autotiling semplice: bordo erboso in cima, terra sotto).
+ * Costruisce il layer grafico del terreno: un unico sprite dipinto in codice
+ * (vedi `render/art/terrain.ts`), che il gioco poi "cuoce" come prima.
+ * `skip` = celle "tx,ty" dei meccanismi, che si disegnano da sole.
  */
-export function buildTileLayer(map: Tilemap, sheets: Sheets, skip?: ReadonlySet<string>): Container {
+export function buildTileLayer(map: Tilemap, _sheets: Sheets, skip?: ReadonlySet<string>): Container {
   const layer = new Container();
   layer.label = 'tiles';
-
-  for (let y = 0; y < map.height; y++) {
-    for (let x = 0; x < map.width; x++) {
-      const cell = map.at(x, y);
-      if (cell === Cell.Empty) continue;
-      if (skip?.has(`${x},${y}`)) continue;
-
-      let index: number;
-      if (cell === Cell.OneWay) {
-        index = pickTile(TILES.beam, !map.isOneWay(x - 1, y), !map.isOneWay(x + 1, y));
-      } else {
-        const set = map.isSolid(x, y - 1) ? TILES.dirt : TILES.grass;
-        index = pickTile(set, !map.isSolid(x - 1, y), !map.isSolid(x + 1, y));
-      }
-
-      const texture = sheets.terrain[index];
-      if (!texture) continue;
-      const sprite = new Sprite(texture);
-      sprite.position.set(x * TILE, y * TILE);
-      layer.addChild(sprite);
-    }
-  }
+  layer.addChild(new Sprite(paintTerrain(map, skip)));
   return layer;
 }

@@ -1,4 +1,6 @@
 import { Assets, Rectangle, Texture, TextureSource } from 'pixi.js';
+import { paintGem } from './art/props';
+import { registerParticleStyle } from './particles';
 
 export const TILE = 18;      // px del tileset terreno
 export const CHAR = 24;      // px del tileset personaggi
@@ -46,8 +48,19 @@ export async function loadAssets(): Promise<Sheets> {
   const particles: Record<string, Texture> = {};
   PARTICLE_FILES.forEach((n, i) => { particles[n] = particleTextures[i]!; });
 
+  // Le texture morbide di Kenney restano come "chiavi": chi emette scintille e
+  // polvere continua a passarle, e il sistema di particelle le ridisegna in
+  // pixel art coerente con il resto (vedi particles.ts).
+  registerParticleStyle(particles['star_08']!, 'spark');
+  registerParticleStyle(particles['spark_04']!, 'spark');
+  registerParticleStyle(particles['smoke_08']!, 'dust');
+
+  const terrainTiles = slice(terrain, TILE, TILE);
+  // La gemma di Kenney è sostituita dal cristallo dipinto in codice.
+  terrainTiles[TILES.gem] = paintGem();
+
   return {
-    terrain: slice(terrain, TILE, TILE),
+    terrain: terrainTiles,
     characters: slice(characters, CHAR, CHAR),
     backgrounds: slice(backgrounds, CHAR, CHAR),
     industrial: slice(industrial, TILE, TILE),

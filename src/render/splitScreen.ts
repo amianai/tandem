@@ -1,6 +1,8 @@
-import { Container, Graphics, RenderTexture, Sprite, type Renderer } from 'pixi.js';
+import { Container, Graphics, RenderTexture, type Geometry, type Mesh, type Renderer, type Shader } from 'pixi.js';
 import { clamp, dampAngle, easeInOutCubic } from '../core/math';
 import { clampToBounds, lerpCamera, type Bounds, type CameraState } from './camera';
+import { shaderQuad, uniformsOf, UPSCALE_FRAG } from './shaders';
+import { PAL, P1_COLOR, P2_COLOR } from './theme';
 
 export interface SplitConfig {
   /** Zoom quando i due sono separati e ognuno ha la sua metà. */
@@ -28,13 +30,28 @@ export const DEFAULT_SPLIT: SplitConfig = {
 
 export interface Focus { x: number; y: number }
 
+/**
+ * Un passaggio di disegno del mondo: la camera e il rettangolo di mondo
+ * (in pixel di mondo, origine intera) coperto dalla render texture.
+ */
+export interface PassInfo {
+  readonly cam: CameraState;
+  /** Angolo in alto a sinistra della texture, in pixel di mondo (intero). */
+  readonly ox: number;
+  readonly oy: number;
+  readonly w: number;
+  readonly h: number;
+  /** 0 = camera di GHISA (o schermo unico), 1 = camera di SOFFIO. */
+  readonly index: 0 | 1;
+}
+
 export interface RenderPassOptions {
   shakeX?: number;
   shakeY?: number;
   shakeAngle?: number;
   /** Chiamata prima di ogni passaggio: serve a spostare i layer di parallasse
-   *  in modo diverso per ciascuna delle due camere. */
-  beforePass?: (cam: CameraState) => void;
+   *  e a preparare le luci in modo diverso per ciascuna delle due camere. */
+  beforePass?: (cam: CameraState, pass: PassInfo) => void;
 }
 
 /**
@@ -49,14 +66,25 @@ export interface RenderPassOptions {
  * La linea di taglio è perpendicolare al segmento che unisce i due
  * personaggi: chi sta a sinistra ha la metà di sinistra, chi sta in alto la
  * metà di sopra, e ruota con continuità nel mezzo.
+ *
+ * Rendering: ogni camera disegna il mondo a 1:1 (un pixel di texture = un
+ * pixel di mondo) in una texture piccola, poi un quad la ingrandisce allo
+ * zoom della camera con uno shader "sharp bilinear". Risultato: pixel tutti
+ * della stessa misura a qualunque zoom, camera che scorre di frazioni di
+ * pixel senza tremolio, e tutto (terreno, personaggi, particelle, luci) sulla
+ * stessa griglia. In più il mondo costa meno: si riempiono ~4-9 volte meno
+ * pixel che disegnandolo direttamente a 1280x720.
  */
 export class SplitScreen {
   readonly root = new Container();
 
-  private rtA: RenderTexture;
-  private rtB: RenderTexture;
-  private readonly spriteA = new Sprite();
-  private readonly spriteB = new Sprite();
+  /** Lato della texture di mondo: copre la vista allo zoom minimo + margini. */
+  readonly lowW: number;
+  readonly lowH: number;
+  private lowA: RenderTexture;
+  private lowB: RenderTexture;
+  private readonly quadA: Mesh<Geometry, Shader>;
+  private readonly quadB: Mesh<Geometry, Shader>;
   private readonly maskA = new Graphics();
   private readonly maskB = new Graphics();
   private readonly divider = new Graphics();
@@ -80,24 +108,49 @@ export class SplitScreen {
     private readonly resolution: number,
     public config: SplitConfig = DEFAULT_SPLIT,
   ) {
-    this.rtA = RenderTexture.create({ width, height, resolution });
-    this.rtB = RenderTexture.create({ width, height, resolution });
-    this.spriteA.texture = this.rtA;
-    this.spriteB.texture = this.rtB;
-    this.root.addChild(this.spriteA, this.spriteB, this.maskA, this.maskB, this.divider);
-    this.spriteA.mask = this.maskA;
-    this.spriteB.mask = this.maskB;
+    // Margine per lo scuotimento (traslazione + rotazione) e il sub-pixel.
+    const margin = 20;
+    this.lowW = Math.ceil(width / config.minMergedZoom / 2) * 2 + margin;
+    this.lowH = Math.ceil(height / config.minMergedZoom / 2) * 2 + margin;
+    this.lowA = this.makeLow();
+    this.lowB = this.makeLow();
+    this.quadA = this.makeQuad(this.lowA);
+    this.quadB = this.makeQuad(this.lowB);
+    this.root.addChild(this.quadA, this.quadB, this.maskA, this.maskB, this.divider);
+    this.quadA.mask = this.maskA;
+    this.quadB.mask = this.maskB;
+  }
+
+  private makeLow(): RenderTexture {
+    return RenderTexture.create({
+      width: this.lowW, height: this.lowH, resolution: this.resolution,
+      // lineare: serve allo shader di ingrandimento, che sfuma solo il bordo
+      scaleMode: 'linear',
+    });
+  }
+
+  private makeQuad(rt: RenderTexture): Mesh<Geometry, Shader> {
+    return shaderQuad(
+      UPSCALE_FRAG,
+      { uTexture: rt.source },
+      {
+        uTexSize: { value: new Float32Array([this.lowW, this.lowH]), type: 'vec2<f32>' },
+        uScale: { value: 3, type: 'f32' },
+      },
+      this.lowW, this.lowH,
+    );
   }
 
   resize(width: number, height: number): void {
+    // La texture di mondo dipende solo dallo zoom minimo: basta aggiornare
+    // le dimensioni del viewport.
     this.width = width;
     this.height = height;
-    this.rtA.destroy(true);
-    this.rtB.destroy(true);
-    this.rtA = RenderTexture.create({ width, height, resolution: this.resolution });
-    this.rtB = RenderTexture.create({ width, height, resolution: this.resolution });
-    this.spriteA.texture = this.rtA;
-    this.spriteB.texture = this.rtB;
+  }
+
+  /** Normale della linea di taglio (da A verso B) e apertura 0..1 (con easing). */
+  get splitNormal(): { nx: number; ny: number; e: number } {
+    return { nx: Math.cos(this.angle), ny: Math.sin(this.angle), e: easeInOutCubic(this.t) };
   }
 
   /** Forza lo stato iniziale senza animazione (a inizio livello). */
@@ -188,59 +241,77 @@ export class SplitScreen {
     const x1 = cx - dxL * len, y1 = cy - dyL * len;
     const x2 = cx + dxL * len, y2 = cy + dyL * len;
 
+    // Fascia scura con un filo del colore di ciascun giocatore sul proprio
+    // lato: a colpo d'occhio si sa di chi è ogni metà.
     this.divider.clear();
     if (e > 0.002) {
       const alpha = Math.min(1, e * 1.6);
       const grow = easeInOutCubic(Math.min(1, e * 1.3));
+      const half = 4 * grow;
+      const edge = (side: number, color: number): void => {
+        const ox = nx * side * half, oy = ny * side * half;
+        this.divider
+          .moveTo(x1 + ox, y1 + oy).lineTo(x2 + ox, y2 + oy)
+          .stroke({ width: 2 * grow, color, alpha: alpha * 0.9 });
+      };
       this.divider
         .moveTo(x1, y1).lineTo(x2, y2)
-        .stroke({ width: 7 * grow, color: 0x0b0d16, alpha: alpha * 0.95 })
-        .moveTo(x1, y1).lineTo(x2, y2)
-        .stroke({ width: 2 * grow, color: 0xc9d7ff, alpha: alpha * 0.85 });
+        .stroke({ width: 10 * grow, color: PAL.ink, alpha: alpha * 0.96 });
+      edge(-1, P1_COLOR);
+      edge(1, P2_COLOR);
     }
     this.divider.alpha = 1;
   }
 
   /**
-   * Disegna il mondo due volte (una per camera) e ricompone le due metà.
-   * Quando lo schermo è unico fa un solo passaggio.
+   * Disegna il mondo due volte (una per camera) nelle texture piccole e
+   * aggiorna i quad che le ingrandiscono. Con lo schermo unico fa un solo
+   * passaggio. La composizione finale la fa chi disegna `root`.
    */
   render(renderer: Renderer, world: Container, opts: RenderPassOptions = {}): void {
-    const { shakeX = 0, shakeY = 0, shakeAngle = 0, beforePass } = opts;
     const single = this.t <= 0.002;
-
-    beforePass?.(this.camA);
-    applyCamera(world, this.camA, this.width, this.height, shakeX, shakeY, shakeAngle);
-    renderer.render({ container: world, target: this.rtA, clear: true });
-
+    this.renderPass(renderer, world, this.camA, this.lowA, this.quadA, 0, opts);
     if (single) {
-      // Niente secondo passaggio: spriteB resta acceso ma mascherato a zero,
+      // Niente secondo passaggio: quadB resta acceso ma mascherato a zero,
       // così la sua Graphics continua a valere come maschera e non si disegna.
       this.divider.visible = false;
     } else {
-      beforePass?.(this.camB);
-      applyCamera(world, this.camB, this.width, this.height, shakeX, shakeY, shakeAngle);
-      renderer.render({ container: world, target: this.rtB, clear: true });
+      this.renderPass(renderer, world, this.camB, this.lowB, this.quadB, 1, opts);
       this.divider.visible = true;
     }
+  }
+
+  private renderPass(
+    renderer: Renderer, world: Container, cam: CameraState,
+    target: RenderTexture, quad: Mesh<Geometry, Shader>, index: 0 | 1, opts: RenderPassOptions,
+  ): void {
+    const { shakeX = 0, shakeY = 0, shakeAngle = 0, beforePass } = opts;
+    // Origine intera: il mondo cade sempre sulla griglia della texture.
+    const ox = Math.floor(cam.x) - this.lowW / 2;
+    const oy = Math.floor(cam.y) - this.lowH / 2;
+    world.scale.set(1);
+    world.rotation = 0;
+    world.position.set(-ox, -oy);
+    beforePass?.(cam, { cam, ox, oy, w: this.lowW, h: this.lowH, index });
+    renderer.render({ container: world, target, clear: true });
+
+    // Il resto frazionario della camera, lo zoom e lo scuotimento vivono
+    // tutti nel quad: si muovono in modo continuo, a costo zero.
+    quad.pivot.set(cam.x - ox, cam.y - oy);
+    quad.position.set(this.width / 2 + shakeX, this.height / 2 + shakeY);
+    quad.scale.set(cam.zoom);
+    quad.rotation = shakeAngle;
+    uniformsOf(quad)['uScale'] = cam.zoom;
   }
 
   get isSplit(): boolean { return this.t > 0.002; }
 }
 
-/** Posiziona il mondo in modo che `cam` sia al centro del viewport. */
-export function applyCamera(
-  world: Container, cam: CameraState, w: number, h: number,
-  shakeX = 0, shakeY = 0, shakeAngle = 0,
-): void {
-  world.scale.set(cam.zoom);
-  world.rotation = shakeAngle;
-  // Arrotondiamo la traslazione: su pixel art le posizioni frazionarie
-  // fanno "nuotare" i bordi dei tile.
-  world.position.set(
-    Math.round(-cam.x * cam.zoom + w / 2 + shakeX),
-    Math.round(-cam.y * cam.zoom + h / 2 + shakeY),
-  );
+/** Proietta un punto del mondo sullo schermo, per una data camera. */
+export function worldToScreen(
+  cam: CameraState, x: number, y: number, w: number, h: number,
+): { x: number; y: number } {
+  return { x: (x - cam.x) * cam.zoom + w / 2, y: (y - cam.y) * cam.zoom + h / 2 };
 }
 
 /** Sutherland–Hodgman contro un semipiano: tiene i punti con dot(p-c, n) <= 0. */
