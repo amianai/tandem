@@ -1,26 +1,47 @@
 import { Container, Graphics, Text, TextStyle } from 'pixi.js';
 import { clamp, damp } from '../core/math';
+import { HUD_COLORS, PAL } from '../render/theme';
 
-const FONT = '"Press Start 2P", monospace';
+/**
+ * Stile dell'HUD: un carattere tecnico e squadrato (Chakra Petch), maiuscolo
+ * e spaziato, su targhette scure con un filo d'accento. Niente fumetti né
+ * arrotondamenti morbidi: deve sembrare la strumentazione della fonderia.
+ * Le dimensioni passate a `style` restano quelle storiche (pensate per il
+ * vecchio carattere pixel): qui vengono riscalate.
+ */
+const FONT = '"Chakra Petch", "Rajdhani", system-ui, sans-serif';
+const SIZE_K = 1.55;
 
-const style = (size: number, color: number, alpha = 1): TextStyle =>
+const style = (size: number, color: number, alpha = 1, weight: '500' | '700' = '500'): TextStyle =>
   new TextStyle({
-    fontFamily: FONT, fontSize: size, fill: { color, alpha }, letterSpacing: 1,
-    lineHeight: Math.round(size * 1.8), align: 'center',
+    fontFamily: FONT, fontSize: Math.round(size * SIZE_K), fontWeight: weight,
+    fill: { color, alpha }, letterSpacing: 1.5,
+    lineHeight: Math.round(size * SIZE_K * 1.35), align: 'center',
   });
 
-/** Tastino disegnato: cornice + lettera, per la legenda dei comandi. */
+/** Tastino: placca scura con il bordo del colore del giocatore e lo spessore sotto. */
 function keycap(label: string, color: number): Container {
   const c = new Container();
-  const text = new Text({ text: label, style: style(8, 0xf2f5ff) });
-  const w = Math.max(16, text.width + 10);
-  const h = 16;
+  const text = new Text({ text: label, style: style(8, HUD_COLORS.text, 1, '700') });
+  const w = Math.max(20, Math.round(text.width) + 12);
+  const h = 20;
   const g = new Graphics();
-  g.roundRect(0, 0, w, h, 3).fill({ color: 0x11142b, alpha: 0.9 }).stroke({ width: 1, color, alpha: 0.8 });
-  g.roundRect(1.5, 1.5, w - 3, h - 5, 2).stroke({ width: 1, color: 0xffffff, alpha: 0.07 });
-  text.position.set((w - text.width) / 2, (h - text.height) / 2 - 1);
+  g.rect(0, 2, w, h - 2).fill({ color: PAL.ink, alpha: 0.9 });                  // spessore
+  g.rect(0, 0, w, h - 3).fill({ color: PAL.night1, alpha: 0.95 });
+  g.rect(0, 0, w, 1).fill({ color, alpha: 0.9 });                               // filo d'accento
+  g.rect(0, 0, 1, h - 3).fill({ color: PAL.slate2, alpha: 0.8 });
+  g.rect(w - 1, 0, 1, h - 3).fill({ color: PAL.ink, alpha: 0.8 });
+  text.position.set(Math.round((w - text.width) / 2), Math.round((h - 3 - text.height) / 2));
   c.addChild(g, text);
   return c;
+}
+
+/** Targhetta scura con il filo d'accento a sinistra. */
+function plate(g: Graphics, x: number, y: number, w: number, h: number, accent: number): void {
+  g.rect(x, y, w, h).fill({ color: PAL.night0, alpha: 0.78 });
+  g.rect(x, y, 2, h).fill({ color: accent });
+  g.rect(x + 2, y, w - 2, 1).fill({ color: PAL.slate2, alpha: 0.7 });
+  g.rect(x + 2, y + h - 1, w - 2, 1).fill({ color: PAL.ink, alpha: 0.9 });
 }
 
 export interface HudPlayerInfo {
@@ -114,6 +135,7 @@ export class Hud {
   private readonly legend = new Container();
   private readonly massBar: MassBar;
   private readonly status: [Text, Text];
+  private readonly frame = new Graphics();
 
   constructor(
     private width: number,
@@ -124,13 +146,13 @@ export class Hud {
     this.container.label = 'hud';
     this.container.eventMode = 'none';
 
-    this.levelText = new Text({ text: levelName.toUpperCase(), style: style(8, 0x7d8cc4) });
-    this.levelText.position.set(16, 14);
+    this.levelText = new Text({ text: levelName.toUpperCase(), style: style(8, HUD_COLORS.textDim, 1, '700') });
+    this.levelText.position.set(28, 16);
 
-    this.gemText = new Text({ text: '', style: style(10, 0x8fe3ff) });
-    this.gemText.position.set(16, 30);
+    this.gemText = new Text({ text: '', style: style(9, HUD_COLORS.text, 1, '700') });
+    this.gemText.position.set(44, 36);
 
-    this.promptText = new Text({ text: '', style: style(9, 0xfff2c4) });
+    this.promptText = new Text({ text: '', style: style(9, HUD_COLORS.prompt) });
     this.promptBox.addChild(this.promptBg, this.promptText);
     this.promptBox.alpha = 0;
 
@@ -146,25 +168,41 @@ export class Hud {
 
     this.buildLegend(players);
     this.container.addChild(
-      this.levelText, this.gemText, this.legend, this.massBar.container, this.promptBox,
+      this.frame, this.levelText, this.gemText, this.legend, this.massBar.container, this.promptBox,
       ...this.status,
     );
+    this.drawFrame();
+  }
+
+  /** Targhetta del livello in alto a sinistra, con l'icona della gemma. */
+  private drawFrame(): void {
+    const g = this.frame.clear();
+    plate(g, 16, 12, 196, 46, HUD_COLORS.gem);
+    // gemma stilizzata
+    const gx = 30, gy = 39;
+    g.poly([gx, gy - 6, gx + 6, gy, gx, gy + 6, gx - 6, gy]).fill({ color: PAL.gem1 });
+    g.poly([gx, gy - 6, gx, gy + 6, gx - 6, gy]).fill({ color: PAL.gem2 });
+    g.rect(gx - 1, gy - 3, 1, 2).fill({ color: 0xffffff });
   }
 
   private buildLegend(players: readonly HudPlayerInfo[]): void {
     this.legend.removeChildren();
     players.forEach((p, i) => {
       const group = new Container();
-      const name = new Text({ text: p.name, style: style(8, p.color) });
-      group.addChild(name);
-      let x = name.width + 10;
+      const tag = new Graphics();
+      const name = new Text({ text: p.name, style: style(8, p.color, 1, '700') });
+      name.position.set(10, Math.round((20 - name.height) / 2) - 1);
+      tag.rect(0, 0, Math.round(name.width) + 18, 17).fill({ color: PAL.night0, alpha: 0.8 });
+      tag.rect(0, 0, 3, 17).fill({ color: p.color });
+      group.addChild(tag, name);
+      let x = Math.round(name.width) + 26;
       for (const k of p.keys) {
         const cap = keycap(k, p.color);
-        cap.position.set(x, -4);
+        cap.position.set(x, -1);
         group.addChild(cap);
         x += cap.width + 4;
       }
-      group.position.set(i === 0 ? 16 : this.width - x - 16, this.height - 26);
+      group.position.set(i === 0 ? 16 : this.width - x - 16, this.height - 30);
       this.legend.addChild(group);
     });
   }
@@ -178,9 +216,16 @@ export class Hud {
       this.promptText.text = text;
       const w = this.promptText.width + 28;
       const h = this.promptText.height + 16;
-      this.promptBg.clear()
-        .roundRect(0, 0, w, h, 6).fill({ color: 0x0b0d16, alpha: 0.82 })
-        .roundRect(0.5, 0.5, w - 1, h - 1, 6).stroke({ width: 1, color: 0xfff2c4, alpha: 0.35 });
+      // pannello con staffe agli angoli, come una targa di cantiere
+      const b = this.promptBg.clear()
+        .rect(0, 0, w, h).fill({ color: PAL.night0, alpha: 0.86 })
+        .rect(0, 0, w, 1).fill({ color: PAL.slate2, alpha: 0.6 })
+        .rect(0, h - 1, w, 1).fill({ color: PAL.ink });
+      const c = HUD_COLORS.prompt;
+      for (const [cx, cy, sx, sy] of [[0, 0, 1, 1], [w, 0, -1, 1], [0, h, 1, -1], [w, h, -1, -1]] as const) {
+        b.rect(sx > 0 ? cx : cx - 8, sy > 0 ? cy : cy - 2, 8, 2).fill({ color: c, alpha: 0.85 });
+        b.rect(sx > 0 ? cx : cx - 2, sy > 0 ? cy : cy - 8, 2, 8).fill({ color: c, alpha: 0.85 });
+      }
       this.promptText.position.set(14, (h - this.promptText.height) / 2);
       // In alto, sotto la barra della massa: in basso coprirebbe i personaggi,
       // che in un platform stanno quasi sempre nella metà inferiore.

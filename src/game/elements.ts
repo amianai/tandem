@@ -1,6 +1,7 @@
 import { Container, Graphics } from 'pixi.js';
 import type { Texture } from 'pixi.js';
-import { clamp, damp, easeOutCubic, rectsOverlap, type Rect } from '../core/math';
+import { clamp, damp, rectsOverlap, type Rect } from '../core/math';
+import { drawFragile, drawGate, drawPlate, drawUpdraft } from '../render/art/elementsArt';
 import { TILE } from '../render/assets';
 import type { Particles } from '../render/particles';
 import { Cell, type Tilemap } from './tilemap';
@@ -85,16 +86,10 @@ export class HeavyPlate {
   }
 
   draw(time: number): void {
-    const { x, y, w, h } = this.bounds;
-    const dy = this.press * 4;
-    const shiver = this.hint * Math.sin(time * 26) * 0.9;
-    this.gfx.clear()
-      .roundRect(x + 1, y + 10, w - 2, 4, 1)
-      .fill({ color: 0x0c0f1e, alpha: 0.85 })
-      .roundRect(x + 2 + shiver, y + dy, w - 4, h, 2)
-      .fill({ color: this.active ? this.color : 0x39406b })
-      .roundRect(x + 2 + shiver, y + dy, w - 4, 2, 1)
-      .fill({ color: 0xffffff, alpha: this.active ? 0.35 : 0.12 });
+    drawPlate(this.gfx, this, {
+      bounds: this.bounds, press: this.press, hint: this.hint,
+      active: this.active, load: this.load, color: this.color,
+    }, time);
   }
 }
 
@@ -138,27 +133,9 @@ export class Gate {
   }
 
   draw(time: number): void {
-    const { x, y, w, h } = this.bounds;
-    const e = easeOutCubic(this.openness);
-    const g = this.gfx;
-    g.clear();
-
-    // Guide fisse: si vede sempre dove passerà il cancello.
-    g.rect(x + 1, y, 1, h).fill({ color: this.color, alpha: 0.2 });
-    g.rect(x + w - 2, y, 1, h).fill({ color: this.color, alpha: 0.2 });
-
-    const shown = h * (1 - e);
-    if (shown < 1) return;
-    g.roundRect(x + 1, y, w - 2, shown, 2)
-      .fill({ color: 0x161a33 })
-      .stroke({ width: 1, color: this.color, alpha: 0.55 });
-    const bars = Math.max(1, Math.floor(shown / TILE));
-    for (let i = 0; i < bars; i++) {
-      const by = y + i * TILE + 5;
-      if (by + 3 > y + shown) break;
-      g.rect(x + 3, by, w - 6, 3)
-        .fill({ color: this.color, alpha: 0.32 + 0.12 * Math.sin(time * 3 + i) });
-    }
+    drawGate(this.gfx, this, {
+      bounds: this.bounds, openness: this.openness, latched: this.latched, color: this.color,
+    }, time);
   }
 }
 
@@ -210,21 +187,7 @@ export class FragileFloor {
   }
 
   draw(time: number): void {
-    const g = this.gfx;
-    g.clear();
-    for (const t of this.tiles) {
-      if (t.broken) continue;
-      const x = t.tx * TILE + Math.sin(time * 30 + t.tx) * t.shake * 1.2;
-      const y = t.ty * TILE;
-      g.rect(x, y, TILE, TILE).fill({ color: 0x6b5a45 });
-      g.rect(x, y, TILE, 2).fill({ color: 0x8a7458 });
-      // crepe
-      g.moveTo(x + 4, y).lineTo(x + 7, y + 8).lineTo(x + 3, y + TILE)
-        .stroke({ width: 1, color: 0x3a3025, alpha: 0.8 });
-      g.moveTo(x + 12, y).lineTo(x + 10, y + 9).lineTo(x + 14, y + TILE)
-        .stroke({ width: 1, color: 0x3a3025, alpha: 0.8 });
-      g.rect(x, y, TILE, TILE).stroke({ width: 1, color: 0x2a2318, alpha: 0.5 });
-    }
+    drawFragile(this.gfx, this, this.tiles, time);
   }
 }
 
@@ -251,23 +214,6 @@ export class Updraft {
   }
 
   draw(time: number, particles?: Particles, spark?: Texture, dt = 0): void {
-    const { x, y, w, h } = this.bounds;
-    const g = this.gfx;
-    g.clear();
-    g.rect(x, y, w, h).fill({ color: this.color, alpha: 0.07 });
-    for (let i = 0; i < 4; i++) {
-      const phase = (time * 0.55 + i * 0.25) % 1;
-      const ly = y + h - phase * h;
-      g.moveTo(x + 3 + i * (w - 6) / 4, ly)
-        .lineTo(x + 3 + i * (w - 6) / 4, ly + 9)
-        .stroke({ width: 1, color: this.color, alpha: 0.28 * (1 - phase) });
-    }
-    if (particles && spark && Math.random() < dt * 26) {
-      particles.emit({
-        texture: spark, x: x + Math.random() * w, y: y + h - 4, count: 1,
-        speed: [30, 70], angle: [-Math.PI / 2 - 0.25, -Math.PI / 2 + 0.25],
-        life: [0.5, 1], scale: [0.05, 0.1], tint: this.color, additive: true, drag: 0.6,
-      });
-    }
+    drawUpdraft(this.gfx, this.bounds, this.color, time, particles, spark, dt);
   }
 }

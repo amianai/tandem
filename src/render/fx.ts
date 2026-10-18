@@ -71,6 +71,10 @@ class FxBus {
 /** Coda globale degli eventi visivi del livello. */
 export const fxBus = new FxBus();
 
+/** Soglie della Bilancia (come MassSystem.HEAVY / LIGHT). */
+const HEAVY = 0.6;
+const LIGHT = 0.4;
+
 interface Ring { x: number; y: number; age: number; life: number; color: number; radius: number; flat: boolean }
 interface Flash { x: number; y: number; age: number; life: number; color: number; radius: number; intensity: number }
 interface WorldShock { x: number; y: number; age: number; life: number; strength: number; owner: 0 | 1 }
@@ -162,6 +166,22 @@ export class FxDirector {
     if (p.isDashing && !tr.dash) {
       this.rings.push({ x: p.x, y: p.y - 8, age: 0, life: 0.22, color: c.light, radius: 14, flat: false });
       this.flashes.push({ x: p.x, y: p.y - 8, age: 0, life: 0.25, color: c.glow, radius: 70, intensity: 0.7 });
+    }
+
+    // Abilità pronta: GHISA diventa pesante, SOFFIO diventa leggero. Come i
+    // capelli di Madeline in Celeste, lo stato si legge sul personaggio.
+    const ready = p.role === 'ghisa' ? p.mass >= HEAVY : p.mass <= LIGHT;
+    const wasReady = p.role === 'ghisa' ? tr.mass >= HEAVY : tr.mass <= LIGHT;
+    if (ready && !wasReady) {
+      this.rings.push({ x: p.view.x, y: p.view.y - 9, age: 0, life: 0.32, color: c.light, radius: 15, flat: false });
+      this.flashes.push({ x: p.view.x, y: p.view.y - 9, age: 0, life: 0.3, color: c.glow, radius: 70, intensity: 0.7 });
+      if (this.particles && this.dustTex) {
+        this.particles.emit({
+          texture: this.dustTex, style: 'spark', x: p.view.x, y: p.view.y - 9, count: 8,
+          speed: [30, 90], angle: [Math.PI * 1.1, Math.PI * 1.9], life: [0.25, 0.45],
+          scale: [0.08, 0.15], gravity: 120, drag: 2, tint: c.light, additive: true,
+        });
+      }
     }
 
     // Massa che arriva mentre si tira: granelli dall'altro personaggio.
@@ -286,6 +306,19 @@ export class FxDirector {
   private draw(): void {
     const gu = this.gUnder.clear();
     const go = this.gOver.clear();
+
+    // Alone a gradini attorno a ciascun personaggio (sopra le luci, additivo):
+    // a colpo d'occhio, anche al buio e a schermo diviso, si sa dove si è.
+    // GHISA brilla di più da pesante, SOFFIO da leggero.
+    for (const a of this.actors) {
+      const c = ROLE_COLORS[a.role];
+      const k = a.role === 'ghisa' ? clamp((a.mass - 0.2) / 0.7, 0, 1) : clamp((0.8 - a.mass) / 0.7, 0, 1);
+      const x = Math.round(a.view.x), y = Math.round(a.view.y) - 9;
+      const base = 0.022 + k * 0.03;
+      go.circle(x, y, 22).fill({ color: c.glow, alpha: base * 0.8 });
+      go.circle(x, y, 14).fill({ color: c.glow, alpha: base * 1.1 });
+      go.circle(x, y, 8).fill({ color: c.glow, alpha: base * 1.5 });
+    }
 
     for (const r of this.rings) {
       if (r.age < 0) continue;

@@ -16,7 +16,7 @@ async function boot(): Promise<void> {
   await app.init({
     width: VIEW_W,
     height: VIEW_H,
-    background: '#0b0d16',
+    background: '#07080d',
     antialias: false,
     roundPixels: true,
     resolution: 1,
@@ -29,7 +29,10 @@ async function boot(): Promise<void> {
 
   // Il font deve essere pronto prima di creare i Text, o Pixi misura il fallback.
   try {
-    await document.fonts.load('10px "Press Start 2P"');
+    await Promise.all([
+      document.fonts.load('500 12px "Chakra Petch"'),
+      document.fonts.load('700 12px "Chakra Petch"'),
+    ]);
     await document.fonts.ready;
   } catch { /* nessun font custom: si usa il monospace di sistema */ }
 

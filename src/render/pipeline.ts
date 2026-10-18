@@ -121,6 +121,13 @@ export class RenderPipeline {
       lights: this.lights,
       /** Mostra ingrandita una zona dell'ultimo frame (in pixel 1280x720). */
       inspect: (x: number, y: number, w = 320, h = 180): void => this.inspect(x, y, w, h),
+      /** Come `inspect`, ma con un rettangolo in coordinate MONDO (camera A). */
+      inspectWorld: (x: number, y: number, w = 120, h = 68): void => {
+        const cam = this.opt.split.camA;
+        const sx = (x - cam.x) * cam.zoom + this.opt.viewW / 2;
+        const sy = (y - cam.y) * cam.zoom + this.opt.viewH / 2;
+        this.inspect(Math.round(sx), Math.round(sy), Math.round(w * cam.zoom), Math.round(h * cam.zoom));
+      },
       closeInspect: (): void => document.getElementById('gfx-inspect')?.remove(),
     };
   }

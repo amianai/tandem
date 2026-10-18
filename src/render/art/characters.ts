@@ -220,10 +220,11 @@ export class CharacterArt {
     b.rect(gx, top + 3, 3, 1, iron.deep);
     if (heat > 0.75) b.px(gx + 1, top + 2, 0xfff0d0);
 
-    // elmo: secchio di ghisa con visiera a feritoia
+    // elmo: secchio di ghisa con visiera a feritoia, staccato dal busto
     const hW = W - 3, hH = 6;
     const hx = -Math.floor(hW / 2) + 1;
-    const hy = top - hH + 1;
+    const hy = top - hH;
+    b.rect(hx + 1, top - 1, hW - 2, 1, PAL.ink);
     b.rect(hx, hy + 1, hW, hH - 1, iron.lit);
     b.rect(hx + 1, hy, hW - 2, 1, iron.hi);
     b.rect(hx, hy + 1, 1, hH - 2, iron.hi);
@@ -246,8 +247,14 @@ export class CharacterArt {
       b.rect(-1, hy - 6, 4, 2, iron.hi);
     } else {
       const ay = top + 2 - armsUp * 6 - armSwing * 0.5;
-      b.rect(hw - 1 - armSwing * 0.6, ay, 3, 4, iron.lit);
-      b.rect(hw - 1 - armSwing * 0.6, ay + 4, 3, 2, iron.hi);
+      const ax = hw - 2 - armSwing * 0.6;
+      // braccio staccato dal busto da un filo scuro, spallaccio sopra
+      b.rect(ax - 1, ay, 1, 5, PAL.ink);
+      b.rect(ax, ay, 3, 4, iron.dark);
+      b.rect(ax, ay + 4, 3, 2, iron.hi);
+      b.rect(ax - 1, ay - 2, 5, 3, iron.lit);
+      b.rect(ax - 1, ay - 2, 5, 1, iron.hi);
+      b.rect(ax + 3, ay - 1, 1, 2, iron.dark);
     }
 
     // fumo dallo sfiato e gocce di scintille: la ghisa rovente
@@ -274,7 +281,7 @@ export class CharacterArt {
     const legH = Math.round(lerp(5, 3, m));
     const cloakH = Math.round(lerp(8, 7, m));
     const topW = Math.round(lerp(4, 6, m));
-    const hemW = Math.round(lerp(7, 10, m));
+    const hemW = Math.round(lerp(8, 11, m));
     const top = -legH - cloakH - bob;
     const cloth = { hi: PAL.bone, mid: PAL.fog, shade: PAL.steel0, deep: PAL.slate2 };
     const eye = this.blink > 0 ? PAL.steel0 : mixColor(this.colors.dark, PAL.air3, 0.4 + light * 0.6);
@@ -292,20 +299,27 @@ export class CharacterArt {
     b.rect(1 + legSwing, -legH - lift(run) + tuck, 1, legH - tuck, PAL.slate2);
     b.rect(1 + legSwing, -1 - lift(run), 2, 1, PAL.ink);
 
-    // mantello: trapezio stretto in alto; in planata si apre ad ala
+    // mantello: stretto alle spalle, svasato e sfrangiato all'orlo;
+    // in planata si apre ad ala
     const wings = s.gliding ? 1 : 0;
     for (let r = 0; r < cloakH; r++) {
       const t = r / Math.max(1, cloakH - 1);
-      let w = Math.round(lerp(topW, hemW, t));
-      let x0 = -Math.floor(w / 2);
+      let w = Math.round(lerp(topW, hemW, t * t));
+      let x0 = -Math.floor(w / 2) - (t > 0.5 ? 1 : 0);
       if (wings) {
-        const span = Math.round(lerp(topW + 8, hemW + 2, t));
+        const span = Math.round(lerp(topW + 10, hemW, t));
         w = span; x0 = -Math.floor(span / 2);
       }
       const y = top + r;
-      b.rect(x0, y, w, 1, r === cloakH - 1 ? cloth.shade : cloth.mid);
-      b.px(x0, y, cloth.hi);
-      if (w > 2) b.px(x0 + w - 1, y, cloth.shade);
+      const last = r === cloakH - 1;
+      b.rect(x0, y, w, 1, last ? cloth.shade : cloth.mid);
+      b.px(x0 + w - 1, y, cloth.hi);
+      if (w > 2) b.px(x0, y, cloth.shade);
+      // orlo sfrangiato: frange alterne che ondeggiano
+      if (last) {
+        const wave = Math.floor(time * 6) % 2;
+        for (let k = 0; k < w; k += 2) b.px(x0 + k + wave, y + 1, cloth.shade);
+      }
     }
     // fascia diagonale nel colore del giocatore
     for (let k = 0; k < Math.min(4, cloakH - 2); k++) b.px(-1 + k, top + 1 + k, this.colors.dark);
@@ -318,20 +332,24 @@ export class CharacterArt {
       b.rect(Math.floor(topW / 2), top + 1 + Math.round(armSwing * 0.5), 1, 4, PAL.slate2);
     }
 
-    // testa: maschera di porcellana con un solo occhio
+    // testa: maschera di porcellana con un solo occhio, dentro un cappuccio
     const hx = -3, hy = top - 6;
+    // cappuccio scuro con la punta all'indietro
+    b.rect(hx - 1, hy - 1, 6, 1, PAL.slate1);
+    b.rect(hx - 2, hy, 3, 5, PAL.slate1);
+    b.px(hx - 3, hy, PAL.slate1);
+    b.px(hx - 4, hy - 1, PAL.slate2);
+    b.rect(hx - 1, hy + 5, 4, 1, PAL.slate1);
+    // maschera
     b.rect(hx + 1, hy, 5, 1, cloth.hi);
-    b.rect(hx, hy + 1, 7, 4, cloth.hi);
+    b.rect(hx + 1, hy + 1, 6, 4, cloth.hi);
     b.rect(hx + 6, hy + 1, 1, 4, cloth.mid);
-    b.rect(hx + 1, hy + 5, 5, 1, cloth.mid);
-    // cappuccio: banda scura dietro la maschera
-    b.rect(hx - 1, hy + 1, 2, 4, PAL.slate1);
-    b.rect(hx, hy, 2, 1, PAL.slate1);
+    b.rect(hx + 2, hy + 5, 4, 1, cloth.mid);
     // occhio
     b.rect(hx + 4, hy + 2, 2, 1, eye);
     if (light > 0.6 && this.blink <= 0) b.px(hx + 5, hy + 2, 0xffffff);
     // fessura della bocca
-    b.px(hx + 4, hy + 4, cloth.shade);
+    b.px(hx + 5, hy + 4, cloth.shade);
   }
 
   private simScarf(s: CharacterState, dt: number, ax: number, ay: number, light: number): void {
@@ -349,15 +367,16 @@ export class CharacterArt {
     }
     const h = Math.max(dt, 1 / 240) / 2;
     // leggero = galleggia e ondeggia all'indietro; pesante = pende
-    const g = lerp(520, -40, light);
-    const trail = -s.facing * (60 + Math.abs(s.vx) * 1.2) * (0.4 + light);
+    const g = lerp(480, 70, light);
+    const trail = -s.facing * (20 + Math.abs(s.vx) * 1.6) * (0.5 + light);
     for (let step = 0; step < 2; step++) {
       for (let i = 1; i < n; i++) {
         const p = this.scarf[i]!;
         const vx = (p.x - p.px) * 0.96;
         const vy = (p.y - p.py) * 0.96;
         p.px = p.x; p.py = p.y;
-        const flutter = Math.sin(this.lastTime * 8 + i * 0.8) * 260 * light * (i / n);
+        // onda che corre lungo la sciarpa, più ampia verso la punta
+        const flutter = Math.sin(this.lastTime * 6.5 - i * 0.9) * 340 * (0.3 + light) * (i / n);
         p.x += vx + trail * h * h;
         p.y += vy + (g + flutter) * h * h;
       }
@@ -419,21 +438,24 @@ export class CharacterArt {
     }
   }
 
-  /** Scie: sagome piatte nel colore del giocatore, in somma additiva. */
+  /** Scie: sagome nel colore del giocatore, in somma additiva, che svaniscono. */
   private drawGhosts(ix: number, iy: number): void {
     const g = this.ghostG.clear();
     for (const gh of this.ghosts) {
-      const a = (1 - gh.age / 0.26) * 0.55;
+      const k = gh.age / 0.26;
+      const a = (1 - k) * 0.42;
       const ox = gh.x - ix, oy = gh.y - iy;
       const col = this.colors.main;
       if (this.role === 'ghisa') {
-        const w = 11, h = Math.round(16 * gh.sy);
-        g.rect(ox - 5, oy - h, w, h - 3).fill({ color: col, alpha: a });
-        g.rect(ox - 3, oy - h - 3, 7, 3).fill({ color: col, alpha: a * 0.7 });
+        // picchiata: solo il contorno del blocco, più strie verticali
+        const h = Math.round(16 * gh.sy);
+        g.rect(ox - 5, oy - h, 11, h - 2).stroke({ width: 1, color: col, alpha: a, alignment: 1 });
+        g.rect(ox - 2, oy - h - 6, 1, 5).fill({ color: this.colors.light, alpha: a });
+        g.rect(ox + 2, oy - h - 4, 1, 4).fill({ color: this.colors.light, alpha: a });
       } else {
         const w = Math.round(9 * gh.sx);
-        g.rect(ox - Math.floor(w / 2), oy - 12, w, 9).fill({ color: col, alpha: a });
-        g.rect(ox - 3, oy - 17, 6, 5).fill({ color: col, alpha: a * 0.8 });
+        g.rect(ox - Math.floor(w / 2), oy - 12, w, 9).fill({ color: col, alpha: a * 0.8 });
+        g.rect(ox - 3, oy - 17, 6, 5).fill({ color: col, alpha: a * 0.6 });
       }
     }
   }

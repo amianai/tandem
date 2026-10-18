@@ -110,7 +110,7 @@ export const ELEMENT_COLORS = {
 /** Mondo: luce ambiente (moltiplicata) e colori di sfondo/nebbia. */
 export const WORLD = {
   /** Luce ambiente: quanto resta visibile lontano da ogni sorgente. */
-  ambient: 0x8a91b4,
+  ambient: 0x969dc0,
   sky: [PAL.night0, PAL.night1, 0x1e1a2e, 0x2e1c26] as const,
   fog: 0x39405c,
   horizon: 0x5a2a24,
