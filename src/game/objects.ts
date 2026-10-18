@@ -1,5 +1,6 @@
-import { Container, Graphics } from 'pixi.js';
+import { Container } from 'pixi.js';
 import { approach, clamp, damp, easeOutCubic, lerp, type Rect } from '../core/math';
+import { CassaView, ManticeView, ZavorraView } from '../render/art/objects';
 import type { Physics, Pushable, SolidBody, SolidKind } from './physics';
 
 const GRAVITY = 1400;
@@ -18,10 +19,11 @@ abstract class Body implements SolidBody {
   abstract readonly h: number;
   abstract readonly solidKind: SolidKind;
 
+  /**
+   * Resta in (0,0): le viste del kit grafico si posizionano da sole in
+   * coordinate mondo, così tonfi e scintille nascono nel punto giusto.
+   */
   readonly view = new Container();
-  protected readonly gfx = new Graphics();
-
-  constructor() { this.view.addChild(this.gfx); }
 
   get box(): Rect { return { x: this.x - this.w / 2, y: this.y - this.h, w: this.w, h: this.h }; }
 
@@ -78,12 +80,9 @@ abstract class Body implements SolidBody {
     if (dy === 0) this.onGround = physics.bodyBlocked(this.boxAt(this.x, this.y + 1), this);
   }
 
-  protected viewPosition(alpha: number): void {
-    this.view.position.set(
-      Math.round(lerp(this.prevX, this.x, alpha)),
-      Math.round(lerp(this.prevY, this.y, alpha)),
-    );
-  }
+  /** Posizione interpolata per il disegno, fra lo stato fisico precedente e quello corrente. */
+  protected drawX(alpha: number): number { return lerp(this.prevX, this.x, alpha); }
+  protected drawY(alpha: number): number { return lerp(this.prevY, this.y, alpha); }
 }
 
 /* ------------------------------------------------------------------ *
@@ -99,6 +98,12 @@ export class Crate extends Body implements Pushable {
   /** Chi è sotto questa soglia ci sbatte contro e basta. */
   readonly minPusherMass = 0.3;
   private physics: Physics | null = null;
+  private readonly art = new CassaView();
+
+  constructor() {
+    super();
+    this.view.addChild(this.art.container);
+  }
 
   update(dt: number, physics: Physics): void {
     this.physics = physics;
@@ -118,15 +123,10 @@ export class Crate extends Body implements Pushable {
     this.onGround = false;
   }
 
-  draw(alpha: number): void {
-    this.viewPosition(alpha);
-    const g = this.gfx;
-    g.clear()
-      .rect(-8, -16, 16, 16).fill({ color: 0x8a5a33 })
-      .rect(-8, -16, 16, 3).fill({ color: 0xa8713f })
-      .rect(-8, -16, 16, 16).stroke({ width: 1, color: 0x3b2414 })
-      .moveTo(-7, -15).lineTo(7, -1).stroke({ width: 1, color: 0x5b3a20 })
-      .moveTo(7, -15).lineTo(-7, -1).stroke({ width: 1, color: 0x5b3a20 });
+  draw(alpha: number, time: number): void {
+    this.art.update({
+      x: this.drawX(alpha), y: this.drawY(alpha), w: this.w, h: this.h, vx: this.vx, vy: this.vy,
+    }, time);
   }
 }
 
@@ -145,43 +145,32 @@ export class Ballast extends Body {
   readonly solidKind = 'full' as const;
   state: 'carried' | 'placed' = 'carried';
   mass = 0;
-  facing = 1;
-  private settle = 0;
+  facing: -1 | 1 = 1;
+  private readonly art = new ZavorraView();
+
+  constructor() {
+    super();
+    this.view.addChild(this.art.container);
+  }
 
   update(dt: number, physics: Physics): void {
     if (this.state !== 'placed') return;
     this.simulate(dt, physics);
-    this.settle = Math.max(0, this.settle - dt * 3);
   }
-
-  /** Chiamato quando viene posata: fa partire il piccolo "tonfo". */
-  dropped(): void { this.settle = 1; }
 
   /** Posizione sulla schiena del portatore, per il disegno. */
   carryAt(x: number, y: number, facing: number): void {
     this.x = x - facing * 7;
     this.y = y - 5;
     this.prevX = this.x; this.prevY = this.y;
-    this.facing = facing;
+    this.facing = facing < 0 ? -1 : 1;
   }
 
   draw(alpha: number, time: number): void {
-    const g = this.gfx;
-    g.clear();
-    if (this.state === 'carried') {
-      this.view.position.set(Math.round(this.x), Math.round(this.y));
-      g.roundRect(-4, -8, 8, 8, 1).fill({ color: 0x3c4458 }).stroke({ width: 1, color: 0x1a1e29 });
-      return;
-    }
-    this.viewPosition(alpha);
-    const sq = easeOutCubic(this.settle);
-    const charge = clamp(this.mass / 0.9, 0, 1);
-    const glow = charge * (0.55 + 0.45 * Math.sin(time * 3));
-    g.roundRect(-8 - sq, -14 + sq * 2, 16 + sq * 2, 14 - sq * 2, 2)
-      .fill({ color: 0x3c4458 })
-      .stroke({ width: 1, color: 0x161a24 });
-    g.rect(-6, -11 + sq * 2, 12, 2).fill({ color: 0x5eead4, alpha: 0.25 + glow * 0.7 });
-    g.rect(-6, -6 + sq, 12 * charge, 2).fill({ color: 0x5eead4, alpha: 0.9 });
+    this.art.update({
+      x: this.drawX(alpha), y: this.drawY(alpha), w: this.w, h: this.h,
+      state: this.state, mass: this.mass, facing: this.facing,
+    }, time);
   }
 }
 
@@ -207,6 +196,12 @@ export class Bellows extends Body {
   launchPulse = 0;
   private recallT = 0;
   private recallFrom = { x: 0, y: 0 };
+  private readonly art = new ManticeView();
+
+  constructor() {
+    super();
+    this.view.addChild(this.art.container);
+  }
 
   /** Altezza (px) a cui spedisce un corpo di massa `mass` a carica piena. */
   static launchHeight(charge: number, mass: number): number {
@@ -263,27 +258,9 @@ export class Bellows extends Body {
   }
 
   draw(alpha: number, time: number): void {
-    const g = this.gfx;
-    g.clear();
-    if (this.state === 'carried') {
-      this.view.position.set(Math.round(this.x), Math.round(this.y));
-      g.roundRect(-4, -4, 8, 4, 1).fill({ color: 0x6b4a5c }).stroke({ width: 1, color: 0x2a1a24 });
-      return;
-    }
-    this.viewPosition(alpha);
-    const h = 8 * (1 - this.squash * 0.5);
-    const glow = this.charge * (0.6 + 0.4 * Math.sin(time * 8));
-    // soffietto a pieghe
-    g.rect(-9, -h, 18, h).fill({ color: 0x4a3542 });
-    for (let i = 1; i < 4; i++) {
-      g.moveTo(-9, -h * i / 4).lineTo(9, -h * i / 4).stroke({ width: 1, color: 0x2a1a24, alpha: 0.7 });
-    }
-    g.rect(-10, -h - 2, 20, 2).fill({ color: 0x8e6a7e });
-    g.rect(-10, -h - 2, 20, 2).fill({ color: 0xff6fb5, alpha: glow });
-    g.rect(-9, -h, 18, h).stroke({ width: 1, color: 0x1e121a });
-    if (this.launchPulse > 0) {
-      g.circle(0, -h, 6 + (1 - this.launchPulse) * 16)
-        .stroke({ width: 2, color: 0xff6fb5, alpha: this.launchPulse * 0.8 });
-    }
+    this.art.update({
+      x: this.drawX(alpha), y: this.drawY(alpha), w: this.w, h: this.h,
+      state: this.state, charge: this.charge, squash: this.squash, launchPulse: this.launchPulse,
+    }, time);
   }
 }

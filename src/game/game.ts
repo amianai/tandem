@@ -363,7 +363,6 @@ export class Game {
       b.state = 'placed';
       b.placeAt(spot.x, spot.y);
       b.mass = this.mass.depositBallast();
-      b.dropped();
       this.physics.add(b);
       this.shake.add(0.12 + b.mass * 0.3);
       this.burst(spot.x, spot.y - 4, P1_COLOR, 14);
@@ -483,7 +482,7 @@ export class Game {
     for (const g of this.gates.values()) g.draw(this.time);
     this.fragile?.draw(this.time);
     this.updraft?.draw(this.time, this.particles, this.sparkTexture, frameDelta);
-    for (const { crate } of this.crates) crate.draw(alpha);
+    for (const { crate } of this.crates) crate.draw(alpha, this.time);
     this.ballast.draw(alpha, this.time);
     this.bellows.draw(alpha, this.time);
 
