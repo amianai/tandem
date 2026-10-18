@@ -79,7 +79,7 @@ funzionano identici su layout italiano, americano o altro.
 ```
 src/
   core/      loop a timestep fisso, input, matematica
-  render/    assets, camere, split-screen, particelle, sfondo
+  render/    pipeline, split-screen, luci, post, effetti, tema; art/ = arte in codice
   game/      tilemap+collisioni, player, porta ad accordo, livelli
   ui/        HUD e overlay di debug
 ```
@@ -88,23 +88,34 @@ Punti non ovvi:
 
 - **Loop a passo fisso** (1/120 s) con interpolazione in rendering: la fisica
   è identica su 60 e 144 Hz, il disegno resta fluido.
-- **Split-screen**: il mondo viene disegnato due volte su due render texture,
-  ricomposte con due maschere poligonali. A `t = 0` le due camere coincidono,
-  quindi la cucitura è invisibile e l'apertura non ha stacchi. La linea è
-  perpendicolare al segmento fra i due personaggi e ruota con continuità.
-  Isteresi sulle soglie per non far sfarfallare l'apertura.
-- **Tile "cotti"**: i tile vengono renderizzati una volta sola in un'unica
-  texture. A zoom non interi, sprite adiacenti lascerebbero fessure di 1px.
-- **Autotiling**: ogni set del tileset Kenney è
-  `[singolo, bordo sinistro, centro, bordo destro]`; solo il *centro* si
-  ripete senza cuciture (verificato con `/striptest.html`).
+- **Split-screen**: il mondo viene disegnato una volta per camera, a 1:1
+  (un pixel di texture = un pixel di mondo), in una texture piccola che un
+  quad ingrandisce allo zoom della camera con uno shader *sharp bilinear*:
+  pixel tutti uguali a ogni zoom e camera che scorre di frazioni di pixel.
+  Le due metà si ricompongono con due maschere poligonali. A `t = 0` le due
+  camere coincidono, quindi la cucitura è invisibile e l'apertura non ha
+  stacchi. La linea è perpendicolare al segmento fra i due personaggi e
+  ruota con continuità. Isteresi sulle soglie per non far sfarfallare
+  l'apertura.
+- **Grafica**: tutto ciò che si vede è dipinto in codice (terreno, sfondi,
+  personaggi, oggetti, particelle), con luci 2D a lightmap e un solo
+  passaggio di post-processing a schermo (bloom, grading, vignettatura,
+  grana, onde d'urto). Direzione, ricerca e dettagli tecnici in
+  [`docs/GRAFICA.md`](docs/GRAFICA.md); colori in `src/render/theme.ts`.
+- **Terreno "cotto"**: dipinto pixel per pixel in un'unica texture (niente
+  tile accostati, quindi niente fessure né ripetizioni).
 - **Feel del salto**: coyote time, jump buffer, salto variabile, gravità
   ridotta all'apice, squash & stretch, polvere all'atterraggio.
 
 ## Strumenti di sviluppo
 
-- `/tileset.html` — tutti i tile con il loro indice numerico.
-- `/striptest.html` — banco di prova per le cuciture fra tile.
+- `/art.html` — kit artistico: Zavorra, Mantice e Casse in tutti gli stati,
+  più il foglio dei personaggi (`?zoom=8&cx=..&cy=..` per ingrandire).
+- `__gfx.inspectWorld(x, y, w, h)` in console: zona del mondo ingrandita
+  dall'ultimo frame; `__gfx.post.settings`, `__gfx.lights.ambient` per
+  regolare il look dal vivo.
+- `/tileset.html`, `/striptest.html` — strumenti del vecchio tileset Kenney
+  (non più usato a schermo).
 - In console: `__tandem.teleport(0, x, y)`, `__tandem.setMass(0.9)` (massa di GHISA),
   `__tandem.ballast`, `__tandem.bellows`, `__tandem.crates`,
   e `__tandem.game.fixedUpdate(1/120)` per far avanzare la fisica a mano
@@ -112,5 +123,11 @@ Punti non ovvi:
 
 ## Asset
 
-Kenney (CC0, pubblico dominio): Pixel Platformer, Pixel Platformer Industrial
-Expansion, Particle Pack, UI Pack Pixel Adventure, Interface Sounds.
+L'arte a schermo è generata in codice (nessun file nuovo). Restano nel
+progetto, da Kenney (CC0, pubblico dominio): Pixel Platformer, Pixel
+Platformer Industrial Expansion, Particle Pack, UI Pack Pixel Adventure,
+Interface Sounds; le texture delle particelle servono solo da "chiavi" per
+gli stili pixel art (vedi `src/render/particles.ts`).
+
+Carattere dell'HUD: [Chakra Petch](https://fonts.google.com/specimen/Chakra+Petch)
+(Cadson Demak, SIL Open Font License 1.1), caricato da Google Fonts.

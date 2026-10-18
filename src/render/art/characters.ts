@@ -447,11 +447,12 @@ export class CharacterArt {
       const ox = gh.x - ix, oy = gh.y - iy;
       const col = this.colors.main;
       if (this.role === 'ghisa') {
-        // picchiata: solo il contorno del blocco, più strie verticali
+        // picchiata: sagoma appena accennata e strie verticali (motion smear)
         const h = Math.round(16 * gh.sy);
-        g.rect(ox - 5, oy - h, 11, h - 2).stroke({ width: 1, color: col, alpha: a, alignment: 1 });
-        g.rect(ox - 2, oy - h - 6, 1, 5).fill({ color: this.colors.light, alpha: a });
-        g.rect(ox + 2, oy - h - 4, 1, 4).fill({ color: this.colors.light, alpha: a });
+        g.rect(ox - 4, oy - h, 9, h - 3).fill({ color: col, alpha: a * 0.3 });
+        g.rect(ox - 4, oy - h - 4, 1, h).fill({ color: this.colors.light, alpha: a * 0.8 });
+        g.rect(ox + 4, oy - h - 2, 1, h - 2).fill({ color: this.colors.light, alpha: a * 0.8 });
+        g.rect(ox, oy - h - 6, 1, 6).fill({ color: this.colors.light, alpha: a });
       } else {
         const w = Math.round(9 * gh.sx);
         g.rect(ox - Math.floor(w / 2), oy - 12, w, 9).fill({ color: col, alpha: a * 0.8 });

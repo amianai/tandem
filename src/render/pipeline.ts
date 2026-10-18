@@ -53,7 +53,7 @@ export class RenderPipeline {
   private readonly post: PostProcess;
   private readonly fx: FxDirector;
   private readonly scenery: Scenery;
-  private lastNow = performance.now();
+  private lastTime = -1;
   /** Millisecondi di JS spesi nell'ultimo `present` (diagnostica). */
   lastCostMs = 0;
 
@@ -86,8 +86,10 @@ export class RenderPipeline {
 
   present(renderer: Renderer, frame: FrameInput): void {
     const t0 = performance.now();
-    const dt = Math.min(0.1, (t0 - this.lastNow) / 1000);
-    this.lastNow = t0;
+    // Tempo di GIOCO, non dell'orologio: gli effetti si fermano con la
+    // simulazione (pausa, passo-passo da console) e restano deterministici.
+    const dt = this.lastTime < 0 ? 0 : Math.min(0.1, Math.max(0, frame.time - this.lastTime));
+    this.lastTime = frame.time;
     const { split, background, world, viewW, viewH } = this.opt;
 
     this.fx.update(dt, frame, fxBus.drain());

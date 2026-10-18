@@ -104,7 +104,7 @@ export const ELEMENT_COLORS = {
   crack: PAL.ember2,
   gem: PAL.gem1,
   goal: PAL.signal2,
-  dust: 0x8a8fa6,
+  dust: 0x5a6080,
 } as const;
 
 /** Mondo: luce ambiente (moltiplicata) e colori di sfondo/nebbia. */

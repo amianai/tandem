@@ -181,7 +181,7 @@ export class Particles {
         s.texture = pixelFrames().dust[p.size - 1]!;
         s.tint = dustTint(o.tint ?? ELEMENT_COLORS.dust);
         s.blendMode = 'normal';
-        s.alpha = p.startAlpha = Math.min(0.85, p.startAlpha);
+        s.alpha = p.startAlpha = Math.min(0.7, p.startAlpha);
       } else {
         p.size = Math.floor(Math.random() * 3);
         s.texture = pixelFrames().debris[p.size]!;

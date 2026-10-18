@@ -234,9 +234,14 @@ export function drawUpdraft(
 ): void {
   const { x, y, w, h } = bounds;
   g.clear();
-  // colonna appena percettibile
-  g.rect(x, y, w, h).fill({ color, alpha: 0.035 });
-  g.rect(x, y + h - 30, w, 30).fill({ color, alpha: 0.03 });
+  // colonna: velo leggero e due bordi tratteggiati che "scorrono" in su
+  g.rect(x, y, w, h).fill({ color, alpha: 0.05 });
+  g.rect(x, y + h - 40, w, 40).fill({ color, alpha: 0.04 });
+  const dash = Math.floor(time * 20) % 6;
+  for (let yy = y + ((6 - dash) % 6); yy < y + h; yy += 6) {
+    g.rect(x, yy, 1, 3).fill({ color, alpha: 0.22 });
+    g.rect(x + w - 1, yy, 1, 3).fill({ color, alpha: 0.22 });
+  }
   // strie che salgono a velocità diverse
   for (let i = 0; i < 7; i++) {
     const speed = 0.35 + hash2(i, 0, 3) * 0.4;
@@ -244,7 +249,7 @@ export function drawUpdraft(
     const len = 6 + Math.floor(hash2(i, 2, 3) * 10);
     const sx = x + 2 + Math.floor(hash2(i, 3, 3) * (w - 4));
     const sy = Math.round(y + h - phase * h);
-    const a = 0.32 * Math.sin(phase * Math.PI);
+    const a = 0.5 * Math.sin(phase * Math.PI);
     g.rect(sx, sy, 1, len).fill({ color, alpha: a });
   }
   // bocchetta con ventola che gira (pale alternate)
