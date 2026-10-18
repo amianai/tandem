@@ -24,6 +24,29 @@ I due ruoli sono fissi e specularmente inutili da soli:
 Siccome la massa è una sola, non possono mai essere entrambi al massimo della
 propria forma: ogni azione va negoziata.
 
+## Gli oggetti
+
+Ogni personaggio ha un oggetto suo, costruito sulla Bilancia e sul proprio
+ruolo. Uno **trattiene** la massa, l'altro la **trasforma in movimento**.
+
+**ZAVORRA (GHISA)** — un blocco di ghisa portato sulla schiena. Posato a
+terra, GHISA ci scarica dentro tutta la sua massa: il blocco pesa quanto
+pesava lui, preme le piastre da solo e fa da gradino. È l'unico modo per
+essere **leggeri tutti e due** nello stesso momento. In cambio GHISA resta
+senza Schianto finché non torna a riprenderlo: è troppo pesante per essere
+richiamato a distanza.
+
+**MANTICE (SOFFIO)** — un mantice pneumatico basso. Un corpo pesante che ci
+atterra sopra lo carica (lo Schianto di GHISA lo riempie quasi del tutto);
+chi ci salta sopra quando è carico viene sparato in alto con tutta l'energia
+accumulata, e a parità di energia più è leggero più vola. Chi pesa lo carica,
+chi è leggero lo usa. È leggero: SOFFIO lo richiama da qualsiasi distanza,
+ma così perde la carica.
+
+**CASSE** — pesano 0,35. Si spingono solo se non si è troppo leggeri (chi è
+pesante le spinge più svelto). Le piastre sommano il peso di tutto ciò che ci
+sta sopra: due casse bastano, oppure una cassa più un giocatore leggero.
+
 ## Avvio
 
 ```bash
@@ -40,6 +63,11 @@ npm run build    # typecheck + bundle in dist/
 | **SOFFIO** | `←` `→` | `↑` | `.` | `-` |
 
 `Q` + `.` premuti **insieme** = inversione delle masse.
+Tasto abilità **a terra** = posa, riprendi o richiama il proprio oggetto;
+**in aria** = Schianto o Scatto.
+
+Livelli: `Shift+N` passa al successivo, oppure `?level=0` (Laboratorio) e
+`?level=1` (Sandbox 01) nell'URL.
 
 `F1` pannello diagnostico · `Shift+R` respawn di entrambi.
 
@@ -77,7 +105,8 @@ Punti non ovvi:
 
 - `/tileset.html` — tutti i tile con il loro indice numerico.
 - `/striptest.html` — banco di prova per le cuciture fra tile.
-- In console: `__tandem.teleport(0, x, y)`, `__tandem.mass.balance = 0.9`,
+- In console: `__tandem.teleport(0, x, y)`, `__tandem.setMass(0.9)` (massa di GHISA),
+  `__tandem.ballast`, `__tandem.bellows`, `__tandem.crates`,
   e `__tandem.game.fixedUpdate(1/120)` per far avanzare la fisica a mano
   (utile per provare una meccanica senza giocare in tempo reale).
 
