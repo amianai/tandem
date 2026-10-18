@@ -260,16 +260,20 @@ export class ManticeView {
     // base
     px(g, x0 - 1, -2, W + 2, 2, PAL.night1);
     px(g, x0 - 1, -2, W + 2, 1, PAL.slate2);
-    // pieghe a fisarmonica: alternano sporgenze e rientranze
+    // pieghe a fisarmonica: le sporgenze escono di un pixel dalle piastre,
+    // le rientranze sono scure e si illuminano da dentro con la carica
     const folds = Math.max(2, h - 3);
     for (let k = 0; k < folds; k++) {
       const y = -2 - (k + 1);
       const out = k % 2 === 0;
-      const inset = out ? 0 : 1;
-      px(g, x0 + inset, y, W - inset * 2, 1, out ? PAL.slate1 : PAL.night1);
-      // luce interna nelle rientranze, cresce con la carica
-      if (!out && c > 0.02) px(g, x0 + 2, y, W - 4, 1, air.main, 0.25 + c * 0.75);
-      if (out) px(g, x0, y, 1, 1, PAL.slate3);
+      if (out) {
+        px(g, x0 - 2, y, W + 4, 1, PAL.slate2);
+        px(g, x0 - 2, y, 1, 1, PAL.steel0);
+        px(g, x0 + W + 1, y, 1, 1, PAL.night0);
+      } else {
+        px(g, x0 + 1, y, W - 2, 1, PAL.night0);
+        if (c > 0.02) px(g, x0 + 2, y, W - 4, 1, air.main, 0.3 + c * 0.7);
+      }
     }
     // piastra superiore con la striscia LED della carica
     const ty = -2 - folds - 2;

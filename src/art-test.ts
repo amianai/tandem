@@ -133,8 +133,8 @@ async function boot(): Promise<void> {
     const slide = Math.sin(time * 1.2);
     casse[1]!.update({ x: cx[1]! + slide * 20, y: yc, w: 16, h: 16, vx: Math.cos(time * 1.2) * 24, vy: 0 }, time);
     const fall = time % 2;
-    const fy = fall < 0.5 ? yc - 40 + (fall / 0.5) ** 2 * 40 : yc;
-    casse[2]!.update({ x: cx[2]!, y: fy, w: 16, h: 16, vx: 0, vy: fall < 0.5 ? 320 * (fall / 0.5) : 0 }, time);
+    const fy = fall < 0.5 ? yc - 24 + (fall / 0.5) ** 2 * 24 : yc;
+    casse[2]!.update({ x: cx[2]!, y: fy, w: 16, h: 16, vx: 0, vy: fall < 0.5 ? 260 * (fall / 0.5) : 0 }, time);
 
     const yp = rows[3]!;
     for (const c of chars) {
