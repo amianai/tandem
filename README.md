@@ -24,24 +24,43 @@ I due ruoli sono fissi e specularmente inutili da soli:
 Siccome la massa è una sola, non possono mai essere entrambi al massimo della
 propria forma: ogni azione va negoziata.
 
-## Gli oggetti
+## I gadget: Braci & Tiraggio
 
-Ogni personaggio ha un oggetto suo, costruito sulla Bilancia e sul proprio
-ruolo. Uno **trattiene** la massa, l'altro la **trasforma in movimento**.
+Una regola: **GHISA arma, SOFFIO accende, il leggero decolla.**
 
-**ZAVORRA (GHISA)** — un blocco di ghisa portato sulla schiena. Posato a
-terra, GHISA ci scarica dentro tutta la sua massa: il blocco pesa quanto
-pesava lui, preme le piastre da solo e fa da gradino. È l'unico modo per
-essere **leggeri tutti e due** nello stesso momento. In cambio GHISA resta
-senza Schianto finché non torna a riprenderlo: è troppo pesante per essere
-richiamato a distanza.
+**BRACI (GHISA, `E`, a terra e in aria)** — lancia una brace che si attacca
+alla prima superficie che tocca: muro, soffitto, pavimento, cassa. Con `W`
+tenuto la lancia in alto, con `S` la lascia ai piedi (in aria: in picchiata).
+Ne ha 3 in riserva, una nuova ogni 0,7 s; al massimo 3 accese nel mondo. Più
+GHISA è pesante, più la brace è grossa (scoppio più ampio) ma vola meno.
 
-**MANTICE (SOFFIO)** — un mantice pneumatico basso. Un corpo pesante che ci
-atterra sopra lo carica (lo Schianto di GHISA lo riempie quasi del tutto);
-chi ci salta sopra quando è carico viene sparato in alto con tutta l'energia
-accumulata, e a parità di energia più è leggero più vola. Chi pesa lo carica,
-chi è leggero lo usa. È leggero: SOFFIO lo richiama da qualsiasi distanza,
-ma così perde la carica.
+**TIRAGGIO (SOFFIO, `-`)** — a terra soffia un cono d'aria: le braci nel cono
+si accendono una dopo l'altra e scoppiano. Con `↓` soffia verso il basso
+(anche in aria). In aria, se è leggero, `-` resta lo Scatto: attraversare una
+brace la accende e allunga lo Scatto. Leggero = getto lungo e stretto,
+pesante = corto e largo. Il soffio spinge anche il compagno leggero e le casse.
+
+**Lo scoppio** non ferisce mai: spinge, tanto più forte quanto più sei
+leggero, sempre almeno per metà verso l'alto. Accende le braci vicine (micce),
+sbalza le casse, abbatte i muri di loppa, accende i fornelli. Brace ai piedi
+di SOFFIO leggerissimo + soffio verso il basso = **razzo** di ~10 tile. Lo
+Schianto di GHISA accende le braci a terra lì intorno.
+
+## Il fattore morte
+
+- Si muore nella **scoria** e nel **vuoto**. La **lamiera** cede sotto chi è
+  pesante, lo **sfiato** di vapore spinge via i leggeri (il pesante davanti fa
+  da scudo): spesso si muore per una spinta finita male.
+- Chi muore diventa uno **spirito** (Tizzone per GHISA, Sbuffo per SOFFIO) e lo
+  guida con i propri tasti di direzione: vola, attraversa i pericoli, non i
+  muri. Intanto la Bilancia è ferma.
+- **Si rinasce in due**: spirito vicino al compagno e `Q` + `.` insieme. Se
+  l'accordo cade sul battito dello spirito la rinascita è **perfetta** (riserve
+  ricaricate, un secondo di invulnerabilità). Oppure a distanza col gadget:
+  SOFFIO soffia sul Tizzone, GHISA centra lo Sbuffo con una brace (o uno
+  scoppio).
+- Bandiera e **forge** (checkpoint) vogliono tutti e due vivi. Se morite
+  entrambi: "colata persa", si riparte dall'ultima forgia accesa.
 
 **CASSE** — pesano 0,35. Per spingerle serve un peso di 0,3 per ogni cassa
 della fila: due casse a contatto si spingono insieme e chiedono 0,6, e se si
@@ -63,15 +82,14 @@ npm run build    # typecheck + bundle in dist/
 
 | | movimento | salto | tira massa | abilità |
 |---|---|---|---|---|
-| **GHISA** | `A` `D` | `W` | `Q` | `E` |
-| **SOFFIO** | `←` `→` | `↑` | `.` | `-` |
+| **GHISA** | `A` `D` | `W` | `Q` | `E` brace · `S` in aria = Schianto |
+| **SOFFIO** | `←` `→` | `↑` | `.` | `-` soffio · in aria Scatto |
 
 `Q` + `.` premuti **insieme** = inversione delle masse.
-Tasto abilità **a terra** = posa, riprendi o richiama il proprio oggetto;
-**in aria** = Schianto o Scatto.
+Mentre uno dei due è morto, `Q` + `.` insieme fanno rinascere.
 
-Livelli: `Shift+N` passa al successivo, oppure `?level=0` (Laboratorio) e
-`?level=1` (Sandbox 01) nell'URL.
+Livelli: `Shift+N` passa al successivo, oppure `?level=0` (La Fornace) e
+`?level=1` (Sandbox 01) nell'URL. `Shift+R` riparte dall'ultima forgia.
 
 `F1` pannello diagnostico · `Shift+R` respawn di entrambi.
 
@@ -121,7 +139,7 @@ Punti non ovvi:
 - `/tileset.html`, `/striptest.html` — strumenti del vecchio tileset Kenney
   (non più usato a schermo).
 - In console: `__tandem.teleport(0, x, y)`, `__tandem.setMass(0.9)` (massa di GHISA),
-  `__tandem.ballast`, `__tandem.bellows`, `__tandem.crates`,
+  `__tandem.embers`, `__tandem.kill(0)`, `__tandem.crates`,
   e `__tandem.game.fixedUpdate(1/120)` per far avanzare la fisica a mano
   (utile per provare una meccanica senza giocare in tempo reale).
 

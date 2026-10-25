@@ -28,8 +28,8 @@ export interface SlamImpact { x: number; y: number; power: number }
 export type PlayerEvent =
   | { type: 'jumped' }
   | { type: 'landed'; vy: number; slam: boolean }
-  /** Tasto abilità premuto a terra: usa l'oggetto (posa, riprendi, richiama). */
-  | { type: 'object' }
+  /** Tasto gadget: GHISA lancia una brace, SOFFIO soffia. `aim` dai tasti di direzione. */
+  | { type: 'gadget'; aim: 'forward' | 'up' | 'down' }
   /** Abilità tentata nello stato di massa sbagliato. */
   | { type: 'denied'; need: 'heavy' | 'light' };
 
@@ -98,7 +98,18 @@ export class Player {
   private pendingImpact: SlamImpact | null = null;
   /** Rallentamento mentre si spinge una cassa (1 = nessuno). */
   private pushDrag = 1;
+  /**
+   * Velocità orizzontale ricevuta dall'esterno (esplosioni, vapore). È
+   * separata da `vx` perché quella insegue sempre l'input: una spinta
+   * sommata a `vx` verrebbe cancellata nel giro di pochi passi.
+   */
+  extVx = 0;
+  /** Secondi passati da quando ha lasciato il suolo. */
+  private airTime = 0;
+  private dashExtended = false;
   readonly events: PlayerEvent[] = [];
+  /** Falso mentre il giocatore è uno spirito (lo imposta il gioco). */
+  alive = true;
 
   readonly view = new Container();
   /** Il personaggio disegnato (rig procedurale, vedi render/art/characters.ts). */
@@ -158,10 +169,41 @@ export class Player {
     this.squash = 1.45;
   }
 
+  /**
+   * Spinta istantanea (esplosione): la componente verticale sostituisce la
+   * caduta, quella orizzontale va nella velocità esterna.
+   */
+  blast(vx: number, vy: number): void {
+    this.extVx = vx;
+    this.vy = Math.min(this.vy, vy);
+    this.jumping = false;
+    this.slamming = false;
+    this.onGround = false;
+    this.coyote = 0;
+    this.squash = 1.38;
+  }
+
+  /** Spinta continua (getto di vapore), in px/s². */
+  pushAccel(ax: number, ay: number, dt: number): void {
+    this.extVx += ax * dt;
+    this.vy += ay * dt;
+  }
+
+  /** Attraversare una brace durante lo Scatto lo allunga della metà, una volta. */
+  extendDash(): boolean {
+    if (this.dashTimer <= 0 || this.dashExtended) return false;
+    this.dashExtended = true;
+    this.dashTimer += DASH_TIME * 0.5;
+    return true;
+  }
+
+  /** Rinascita perfetta: abilità di ruolo di nuovo disponibile. */
+  refreshAbility(): void { this.dashSpent = false; }
+
   placeAt(x: number, y: number, isSpawn = false): void {
     this.x = x; this.y = y;
     this.prevX = x; this.prevY = y;
-    this.vx = 0; this.vy = 0;
+    this.vx = 0; this.vy = 0; this.extVx = 0;
     this.slamming = false;
     this.dashTimer = 0;
     if (isSpawn) { this.spawn.x = x; this.spawn.y = y; }
@@ -264,7 +306,10 @@ export class Player {
 
     /* --- collisioni --------------------------------------------------- */
     this.pushDrag = 1;
-    this.moveX(this.vx * dt, map);
+    this.moveX((this.vx + this.extVx) * dt, map);
+    // la spinta esterna si smorza: in fretta a terra, piano in aria
+    this.extVx *= Math.exp(-(this.onGround ? 9 : 2.2) * dt);
+    if (Math.abs(this.extVx) < 2) this.extVx = 0;
     this.wasOnGround = this.onGround;
     const fallSpeed = this.vy;
     this.moveY(this.vy * dt, map);
@@ -292,59 +337,57 @@ export class Player {
 
   private updateAbility(dt: number, particles: Particles, fx: PlayerFx): void {
     this.dashTimer = Math.max(0, this.dashTimer - dt);
-
-    // A terra il tasto abilità usa l'oggetto. Finestra strettissima: un
-    // tasto premuto in aria poco prima di atterrare non deve posare niente.
-    if (this.onGround) {
-      if (this.input.abilityBuffered(1 / 30)) {
-        this.input.consumeAbility();
-        this.events.push({ type: 'object' });
-      }
-      return;
-    }
-
-    if (!this.input.abilityBuffered(ABILITY_BUFFER)) return;
-
-    // In aria, nello stato di massa sbagliato: niente abilità, ma lo diciamo.
-    const fresh = this.input.abilityBuffered(1 / 30);
-    if (this.role === 'ghisa' && !this.isHeavy && !this.slamming && fresh) {
-      this.input.consumeAbility();
-      this.events.push({ type: 'denied', need: 'heavy' });
-      return;
-    }
-    if (this.role === 'soffio' && !this.isLight && fresh) {
-      this.input.consumeAbility();
-      this.events.push({ type: 'denied', need: 'light' });
-      return;
-    }
+    this.airTime = this.onGround ? 0 : this.airTime + dt;
+    if (this.dashTimer <= 0) this.dashExtended = false;
 
     if (this.role === 'ghisa') {
-      // Schianto: solo pesante e solo in aria.
-      if (this.isHeavy && !this.onGround && !this.slamming) {
-        this.input.consumeAbility();
-        this.slamming = true;
-        this.vy = SLAM_SPEED;
-        particles.emit({
-          texture: fx.spark, x: this.x, y: this.y - 8, count: 10,
-          speed: [40, 120], angle: [Math.PI * 1.1, Math.PI * 1.9],
-          life: [0.15, 0.3], scale: [0.08, 0.16], tint: this.tint, additive: true,
-        });
+      // Schianto: GIÙ premuto in aria ("giù = picchiata"). Il tasto deve
+      // essere premuto DOPO lo stacco: chi tiene giù per scendere da una
+      // piattaforma attraversabile non picchia per sbaglio.
+      if (!this.onGround && !this.slamming
+          && this.input.sinceDownPress() <= ABILITY_BUFFER
+          && this.input.sinceDownPress() < this.airTime) {
+        this.input.consumeDown();
+        if (this.isHeavy) this.startSlam(particles, fx);
+        else this.events.push({ type: 'denied', need: 'heavy' });
       }
-    } else {
-      // Scatto: solo leggero, in aria, una volta per volo.
-      if (this.isLight && !this.onGround && !this.dashSpent && this.dashTimer <= 0) {
+      // Brace: sempre, a terra e in aria. Su/giù scelgono la traiettoria.
+      if (this.input.abilityBuffered(1 / 30)) {
         this.input.consumeAbility();
-        this.dashTimer = DASH_TIME;
-        this.dashDir = this.input.moveX !== 0 ? Math.sign(this.input.moveX) : this.facing;
-        this.dashSpent = true;
-        this.squash = 1.35;
-        particles.emit({
-          texture: fx.spark, x: this.x, y: this.y - 8, count: 14,
-          speed: [60, 190], angle: [0, Math.PI * 2],
-          life: [0.14, 0.34], scale: [0.07, 0.15], tint: this.tint, additive: true, drag: 5,
-        });
+        this.events.push({ type: 'gadget', aim: this.input.up ? 'up' : this.input.down ? 'down' : 'forward' });
       }
+      return;
     }
+
+    // SOFFIO: a terra soffia; in aria scatta se può, altrimenti soffia.
+    if (!this.input.abilityBuffered(this.onGround ? 1 / 30 : ABILITY_BUFFER)) return;
+    const canDash = !this.onGround && this.isLight && !this.dashSpent
+      && this.dashTimer <= 0 && !this.input.down;
+    if (!canDash) {
+      this.input.consumeAbility();
+      this.events.push({ type: 'gadget', aim: this.input.down ? 'down' : 'forward' });
+      return;
+    }
+    this.input.consumeAbility();
+    this.dashTimer = DASH_TIME;
+    this.dashDir = this.input.moveX !== 0 ? Math.sign(this.input.moveX) : this.facing;
+    this.dashSpent = true;
+    this.squash = 1.35;
+    particles.emit({
+      texture: fx.spark, x: this.x, y: this.y - 8, count: 14,
+      speed: [60, 190], angle: [0, Math.PI * 2],
+      life: [0.14, 0.34], scale: [0.07, 0.15], tint: this.tint, additive: true, drag: 5,
+    });
+  }
+
+  private startSlam(particles: Particles, fx: PlayerFx): void {
+    this.slamming = true;
+    this.vy = SLAM_SPEED;
+    particles.emit({
+      texture: fx.spark, x: this.x, y: this.y - 8, count: 10,
+      speed: [40, 120], angle: [Math.PI * 1.1, Math.PI * 1.9],
+      life: [0.15, 0.3], scale: [0.08, 0.16], tint: this.tint, additive: true,
+    });
   }
 
   private onLand(particles: Particles, fx: PlayerFx, impactVy: number): void {
@@ -394,7 +437,7 @@ export class Player {
           this.pushDrag = lerp(0.35, 0.75, this.mass) / Math.max(1, crate.lastChain * 0.75);
           continue;
         }
-        this.vx = 0; this.dashTimer = 0; return;
+        this.vx = 0; this.extVx = 0; this.dashTimer = 0; return;
       }
       this.x = nextX;
     }

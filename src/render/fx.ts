@@ -38,6 +38,8 @@ export interface FxActor {
   readonly isGliding: boolean;
   /** La vista: la sua posizione è quella interpolata e disegnata. */
   readonly view: Container;
+  /** Falso mentre è uno spirito: niente alone né effetti di movimento. */
+  readonly alive?: boolean;
 }
 
 export type FxEvent =
@@ -117,8 +119,12 @@ export class FxDirector {
   }
 
   update(dt: number, frame: { players: readonly FxActor[]; invertFlash: number }, events: readonly FxEvent[]): void {
-    this.actors = frame.players;
-    frame.players.forEach((p, i) => this.watch(p, this.track[i as 0 | 1], dt, frame.players));
+    this.actors = frame.players.filter((p) => p.alive !== false);
+    frame.players.forEach((p, i) => {
+      if (p.alive !== false) this.watch(p, this.track[i as 0 | 1], dt, frame.players);
+    });
+    // con uno dei due a terra non c'è massa che passa: via i granelli in volo
+    if (this.actors.length < 2) this.motes.length = 0;
 
     // inversione delle masse: il flash della Bilancia sale di colpo a 1
     if (frame.invertFlash > this.prevInvert + 0.5) this.onInvert(frame.players);

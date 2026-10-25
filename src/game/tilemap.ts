@@ -17,7 +17,9 @@ export interface LevelSource {
   /** Righe ASCII; vengono paddate automaticamente alla riga più lunga. */
   readonly rows: readonly string[];
   readonly legend?: Readonly<Record<string, Cell>>;
-  /** Piastra (minuscola) -> cancello (maiuscola) che apre. */
+  /** Caratteri dei marker che sono fornelli (interruttori a fuoco), non piastre. */
+  readonly braziers?: string;
+  /** Piastra o fornello (minuscola) -> cancello (maiuscola) che apre. */
   readonly links?: Readonly<Record<string, string>>;
   /** Cancelli che, una volta aperti, restano aperti. */
   readonly latching?: string;

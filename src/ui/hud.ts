@@ -136,6 +136,10 @@ export class Hud {
   private readonly massBar: MassBar;
   private readonly status: [Text, Text];
   private readonly frame = new Graphics();
+  /** Schermata "colata persa": velo scuro e scritta, sopra tutto. */
+  private readonly lossLayer = new Container();
+  private readonly lossBg = new Graphics();
+  private readonly lossText: Text;
 
   constructor(
     private width: number,
@@ -166,10 +170,17 @@ export class Hud {
       new Text({ text: '', style: style(7, players[1]!.color) }),
     ];
 
+    this.lossText = new Text({ text: 'COLATA PERSA', style: style(28, HUD_COLORS.prompt, 1, '700') });
+    this.lossText.anchor.set(0.5);
+    this.lossText.position.set(width / 2, height / 2);
+    this.lossBg.rect(0, 0, width, height).fill({ color: 0x07080d });
+    this.lossLayer.addChild(this.lossBg, this.lossText);
+    this.lossLayer.visible = false;
+
     this.buildLegend(players);
     this.container.addChild(
       this.frame, this.levelText, this.gemText, this.legend, this.massBar.container, this.promptBox,
-      ...this.status,
+      ...this.status, this.lossLayer,
     );
     this.drawFrame();
   }
@@ -246,6 +257,14 @@ export class Hud {
     const t = this.status[i];
     if (t.text !== text) t.text = text;
     t.position.set(i === 0 ? 16 : this.width - t.width - 16, this.height - 44);
+  }
+
+  /** 0 = invisibile, 1 = schermo coperto. */
+  setLoss(alpha: number): void {
+    this.lossLayer.visible = alpha > 0.01;
+    this.lossBg.alpha = Math.min(1, alpha) * 0.85;
+    this.lossText.alpha = Math.min(1, alpha * 1.5);
+    this.lossText.scale.set(1 + (1 - Math.min(1, alpha)) * 0.15);
   }
 
   update(dt: number): void {

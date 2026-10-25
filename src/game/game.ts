@@ -1,40 +1,49 @@
-import { Container, RenderTexture, Sprite, type Renderer, type Texture } from 'pixi.js';
+import { Container, Graphics, RenderTexture, Sprite, type Renderer, type Texture } from 'pixi.js';
 import { ChordDetector, Keyboard, P1_BINDING, P2_BINDING, PlayerInput } from '../core/input';
 import { rectsOverlap, type Rect } from '../core/math';
 import { CHARS, TILE, TILES, type Sheets } from '../render/assets';
 import { Background } from '../render/background';
 import { Follower, Shake } from '../render/camera';
+import { fxBus } from '../render/fx';
 import { Particles } from '../render/particles';
 import { RenderPipeline } from '../render/pipeline';
 import { SplitScreen } from '../render/splitScreen';
-import { ELEMENT_COLORS, P1_COLOR, P2_COLOR } from '../render/theme';
+import { ELEMENT_COLORS, P1_COLOR, P2_COLOR, PAL, ROLE_COLORS } from '../render/theme';
 import { DebugOverlay } from '../ui/debug';
 import { Hud } from '../ui/hud';
+import { Spirit } from './death';
 import {
   FragileFloor, Gate, HeavyPlate, horizontalRuns, toTile, Updraft, type Weight,
 } from './elements';
+import { EmberSystem, type Cone, type Explosion } from './embers';
+import { Brazier, Forge, Sheet, SlagPool, SlagWall, Vent } from './hazards';
 import { MassSystem } from './mass';
-import { Ballast, Bellows, Crate } from './objects';
+import { Crate } from './objects';
 import { Physics } from './physics';
 import { Pickups } from './pickups';
 import { Player } from './player';
 import { buildTileLayer, Tilemap, type LevelSource } from './tilemap';
 
 const GATE_COLOR = ELEMENT_COLORS.signalOn;
-
-/** Distanza (px) entro cui si riprende un oggetto posato. */
-const PICKUP_RANGE_X = 22;
-const PICKUP_RANGE_Y = 20;
 /** Distanza entro cui compare il suggerimento di una stazione. */
 const HINT_RANGE = 10 * TILE;
+/** Distanza spirito-compagno entro cui l'accordo fa rinascere. */
+const REVIVE_RANGE = 32;
+/** Portata della rinascita col gadget (soffio sul Tizzone). */
+const GADGET_REVIVE_RANGE = 5 * TILE;
+const DEATH_HITSTOP = 0.08;
+const LOSS_FADE = 0.8;
+/** Spinta massima di uno scoppio, moltiplicata per (1 - massa). */
+const BLAST_SPEED = 640;
+
+type Point = { x: number; y: number };
 
 export class Game {
   readonly stage = new Container();
   private readonly world = new Container();
 
   private readonly keyboard = new Keyboard();
-  private readonly input1: PlayerInput;
-  private readonly input2: PlayerInput;
+  private readonly inputs: [PlayerInput, PlayerInput];
   private readonly chord: ChordDetector;
 
   private readonly map: Tilemap;
@@ -53,17 +62,36 @@ export class Game {
   private readonly dustTexture: Texture;
 
   private readonly mass = new MassSystem();
-  private readonly ballast = new Ballast();
-  private readonly bellows = new Bellows();
-  private readonly crates: { crate: Crate; spawn: { x: number; y: number } }[] = [];
+  private readonly embers = new EmberSystem();
+  private readonly reserveGfx = new Graphics();
+  private readonly crates: { crate: Crate; spawn: Point }[] = [];
   private readonly plates: { plate: HeavyPlate; gate: string }[] = [];
+  private readonly braziers: { brazier: Brazier; gate: string }[] = [];
   private readonly gates = new Map<string, Gate>();
   private readonly fragile: FragileFloor | null;
+  private readonly slagWall: SlagWall | null;
+  private readonly slag: SlagPool[] = [];
+  private readonly vents: Vent[] = [];
+  private readonly sheets: Sheet[] = [];
+  private readonly forges: Forge[] = [];
   private readonly updraft: Updraft | null;
   private readonly goal: Rect | null;
   private readonly hints: { x: number; y: number; text: string }[] = [];
 
-  /** Messaggio breve (rifiuti, conferme): ha la precedenza sui suggerimenti. */
+  /* --- morte ---------------------------------------------------------- */
+  private readonly spirits: [Spirit, Spirit] = [new Spirit('ghisa'), new Spirit('soffio')];
+  private readonly alive: [boolean, boolean] = [true, true];
+  private readonly invuln: [number, number] = [0, 0];
+  private readonly lastSafe: [Point, Point];
+  private readonly checkpoint: [Point, Point];
+  private hitstop = 0;
+  /** < 0 = nessuna; altrimenti secondi dall'inizio della dissolvenza "colata persa". */
+  private loss = -1;
+  private lossOut = 0;
+  private deaths = 0;
+  private perfectRevives = 0;
+
+  /** Messaggio breve: ha la precedenza sui suggerimenti. */
   private flash: { text: string; until: number } | null = null;
   private time = 0;
   private finished = false;
@@ -79,9 +107,8 @@ export class Game {
     this.sparkTexture = sheets.particles['star_08']!;
     this.dustTexture = sheets.particles['smoke_08']!;
 
-    this.input1 = new PlayerInput(this.keyboard, P1_BINDING);
-    this.input2 = new PlayerInput(this.keyboard, P2_BINDING);
-    this.chord = new ChordDetector(this.input1, this.input2);
+    this.inputs = [new PlayerInput(this.keyboard, P1_BINDING), new PlayerInput(this.keyboard, P2_BINDING)];
+    this.chord = new ChordDetector(this.inputs[0], this.inputs[1]);
     this.detachInput = this.keyboard.install();
 
     this.map = new Tilemap(level);
@@ -91,6 +118,7 @@ export class Game {
     /* --- elementi del livello ----------------------------------------- */
     const tilesOf = (ch: string) => (this.map.markers.get(ch) ?? []).map(toTile);
     const links = level.links ?? {};
+    const brazierChars = level.braziers ?? '';
 
     for (const gateChar of new Set(Object.values(links))) {
       const tiles = tilesOf(gateChar);
@@ -99,14 +127,33 @@ export class Game {
         this.gates.set(gateChar, new Gate(this.map, tiles, GATE_COLOR, latch));
       }
     }
-    for (const [plateChar, gateChar] of Object.entries(links)) {
-      for (const run of horizontalRuns(tilesOf(plateChar))) {
-        this.plates.push({ plate: new HeavyPlate(run, GATE_COLOR), gate: gateChar });
+    for (const [ch, gateChar] of Object.entries(links)) {
+      if (brazierChars.includes(ch)) {
+        for (const m of this.map.markers.get(ch) ?? []) {
+          this.braziers.push({ brazier: new Brazier(m.x, m.y), gate: gateChar });
+        }
+      } else {
+        for (const run of horizontalRuns(tilesOf(ch))) {
+          this.plates.push({ plate: new HeavyPlate(run, GATE_COLOR), gate: gateChar });
+        }
       }
     }
 
     const xTiles = tilesOf('X');
     this.fragile = xTiles.length ? new FragileFloor(this.map, xTiles) : null;
+    const lTiles = tilesOf('L');
+    this.slagWall = lTiles.length ? new SlagWall(this.map, lTiles) : null;
+    const tTiles = tilesOf('T');
+    for (const run of horizontalRuns(tTiles)) this.sheets.push(new Sheet(this.map, run));
+    for (const run of horizontalRuns(tilesOf('~'))) this.slag.push(new SlagPool(run, this.map.pixelHeight));
+    let ventIndex = 0;
+    for (const [ch, dir] of [['<', -1], ['>', 1]] as const) {
+      for (const t of tilesOf(ch)) {
+        const ox = dir < 0 ? (t.tx + 1) * TILE : t.tx * TILE;
+        this.vents.push(new Vent(ox, t.ty * TILE + TILE / 2, dir, ventIndex++ * 1.1));
+      }
+    }
+    for (const m of this.map.markers.get('K') ?? []) this.forges.push(new Forge(m.x, m.y));
     const uTiles = tilesOf('U');
     this.updraft = uTiles.length ? new Updraft(uTiles, 0x9bd2ff) : null;
 
@@ -118,10 +165,11 @@ export class Game {
     }
 
     /* --- terreno ------------------------------------------------------ */
-    // Cancelli e solaio fragile si disegnano da soli e possono sparire:
-    // se finissero anche nel terreno cotto resterebbero visibili da aperti.
+    // I blocchi che possono sparire si disegnano da soli: se finissero anche
+    // nel terreno cotto resterebbero visibili dopo essere crollati.
     const dynamicTiles = new Set(
-      [...Object.values(links).flatMap((c) => tilesOf(c)), ...xTiles].map((t) => `${t.tx},${t.ty}`),
+      [...Object.values(links).flatMap((c) => tilesOf(c)), ...xTiles, ...lTiles, ...tTiles]
+        .map((t) => `${t.tx},${t.ty}`),
     );
     const tileLayer = buildTileLayer(this.map, sheets, dynamicTiles);
     const baked = RenderTexture.create({
@@ -143,30 +191,39 @@ export class Game {
 
     const framesFor = (idx: readonly number[]) => idx.map((i) => sheets.characters[i]!);
     this.players = [
-      new Player(0, 'ghisa', this.input1, framesFor(CHARS.green), P1_COLOR),
-      new Player(1, 'soffio', this.input2, framesFor(CHARS.pink), P2_COLOR),
+      new Player(0, 'ghisa', this.inputs[0], framesFor(CHARS.green), P1_COLOR),
+      new Player(1, 'soffio', this.inputs[1], framesFor(CHARS.pink), P2_COLOR),
     ];
 
     const s1 = this.map.spawns[0] ?? { x: 4 * TILE, y: 20 * TILE };
     const s2 = this.map.spawns[1] ?? { x: 7 * TILE, y: 20 * TILE };
     this.players[0].placeAt(s1.x, s1.y, true);
     this.players[1].placeAt(s2.x, s2.y, true);
+    this.lastSafe = [{ ...s1 }, { ...s2 }];
+    this.checkpoint = [{ ...s1 }, { ...s2 }];
     this.followers[0].snap(this.players[0].focusX, this.players[0].focusY);
     this.followers[1].snap(this.players[1].focusX, this.players[1].focusY);
 
     this.world.addChild(this.background.container, terrain);
+    for (const s of this.slag) this.world.addChild(s.container);
     if (this.updraft) this.world.addChild(this.updraft.container);
     for (const g of this.gates.values()) this.world.addChild(g.container);
     if (this.fragile) this.world.addChild(this.fragile.container);
+    if (this.slagWall) this.world.addChild(this.slagWall.container);
+    for (const s of this.sheets) this.world.addChild(s.container);
     for (const { plate } of this.plates) this.world.addChild(plate.container);
+    for (const { brazier } of this.braziers) this.world.addChild(brazier.container);
+    for (const f of this.forges) this.world.addChild(f.container);
+    for (const v of this.vents) this.world.addChild(v.container);
     this.world.addChild(this.pickups.container);
     for (const { crate } of this.crates) this.world.addChild(crate.view);
     this.world.addChild(
-      this.bellows.view,
+      this.embers.container,
       this.players[0].view,
       this.players[1].view,
-      // la Zavorra in spalla va sopra GHISA
-      this.ballast.view,
+      this.reserveGfx,
+      this.spirits[0].view,
+      this.spirits[1].view,
       this.particles.container,
     );
 
@@ -188,7 +245,6 @@ export class Game {
       { w: this.map.pixelWidth, h: this.map.pixelHeight },
     );
     this.hud.setGems(0, this.pickups.total);
-    this.carryObjects();
 
     window.addEventListener('keydown', this.onSystemKey);
   }
@@ -202,58 +258,77 @@ export class Game {
 
   private onSystemKey = (e: KeyboardEvent): void => {
     if (e.code === 'F1') { e.preventDefault(); this.debug.toggle(); }
-    if (e.code === 'KeyR' && e.shiftKey) {
-      for (const p of this.players) p.respawn(this.particles, this.sparkTexture);
-    }
+    if (e.code === 'KeyR' && e.shiftKey) this.restartFromCheckpoint();
   };
 
   private say(text: string, seconds = 1.8): void {
     this.flash = { text, until: this.time + seconds };
   }
 
+  private get bothAlive(): boolean { return this.alive[0] && this.alive[1]; }
+
   /* ------------------------------------------------------------------ */
 
   fixedUpdate(dt: number): void {
     this.keyboard.advance(dt);
+    // Hit-stop: alla morte il mondo si ferma un istante. L'orologio dei tasti
+    // continua, così un tasto premuto in quel momento non va perso.
+    if (this.hitstop > 0) { this.hitstop -= dt; return; }
     this.time += dt;
 
-    // 1. la Bilancia decide chi è pesante e chi è leggero
-    if (this.mass.update(dt, this.input1, this.input2, this.chord)) {
-      this.shake.add(0.3);
-      for (const p of this.players) this.burst(p.x, p.y - 8, p.tint, 18);
+    if (this.loss >= 0) {
+      this.loss += dt;
+      if (this.loss >= LOSS_FADE) this.restartFromCheckpoint();
+      this.particles.update(dt);
+      return;
+    }
+    this.lossOut = Math.max(0, this.lossOut - dt);
+
+    // 1. la Bilancia: ferma finché uno dei due è morto. Intanto l'accordo
+    //    serve a rinascere.
+    if (this.bothAlive) {
+      if (this.mass.update(dt, this.inputs[0], this.inputs[1], this.chord)) {
+        this.shake.add(0.3);
+        for (const p of this.players) this.burst(p.x, p.y - 8, p.tint, 18);
+      }
+    } else {
+      this.mass.invertFlash = Math.max(0, this.mass.invertFlash - dt * 2.4);
+      this.tryChordRevive();
     }
     this.players[0].mass = this.mass.m1;
     this.players[1].mass = this.mass.m2;
+    for (const i of [0, 1] as const) this.invuln[i] = Math.max(0, this.invuln[i] - dt);
 
-    // 2. le correnti agiscono prima del passo fisico
+    const living = this.players.filter((p) => this.alive[p.id]);
+
+    // 2. correnti e vapore agiscono prima del passo fisico
     let liftedTooHeavy = false;
     if (this.updraft) {
-      for (const p of this.players) {
-        if (this.updraft.apply(p, dt) && !p.isLight) liftedTooHeavy = true;
-      }
+      for (const p of living) if (this.updraft.apply(p, dt) && !p.isLight) liftedTooHeavy = true;
+    }
+    const ventBodies = living.map((p) => ({
+      box: p.hitbox, mass: p.mass, push: (ax: number, d: number) => p.pushAccel(ax, 0, d),
+    }));
+    for (const v of this.vents) {
+      if (v.update(dt, ventBodies)) fxBus.emit({ type: 'puff', x: v.ox, y: v.oy, count: 6, color: PAL.fog, dir: v.dir });
     }
 
-    // 3. personaggi
-    this.physics.actors = this.players.map((p) => p.hitbox);
-    // Chi preme contro una cassa da terra conta come spinta: se lo fanno in
-    // due dallo stesso lato, i pesi si sommano.
+    // 3. personaggi vivi
+    this.physics.actors = living.map((p) => p.hitbox);
     this.physics.clearPushers();
-    for (const p of this.players) {
+    for (const p of living) {
       const dir = p.moveIntent;
       if (!p.onGround || dir === 0) continue;
       const box = p.hitbox;
       const body = this.physics.pushableAt({ ...box, x: box.x + dir });
       if (body) this.physics.addPusher(body, dir, p.mass);
     }
-    const onBellows = this.players.map((p) =>
-      this.bellows.state === 'placed' && this.physics.standsOn(p.hitbox, this.bellows));
     const fx = { dust: this.dustTexture, spark: this.sparkTexture };
-    const impacts: { x: number; y: number }[] = [];
+    const impacts: Point[] = [];
 
-    this.players.forEach((p, i) => {
+    for (const p of living) {
       p.update(dt, this.physics, this.particles, fx);
-      this.physics.actors[i] = p.hitbox;
-      this.handleEvents(p, onBellows[i]!);
+      this.handleEvents(p);
 
       const impact = p.takeImpact();
       if (impact) {
@@ -267,57 +342,99 @@ export class Game {
           const d = Math.abs(crate.x - impact.x);
           if (d < 64 && Math.abs(crate.y - impact.y) < 24) crate.shove(impact.x, 1 - d / 64);
         }
+        // Schianto incendiario: accende le braci a terra lì intorno
+        this.embers.igniteNear(impact.x, impact.y - 4, 3 * TILE, 0.05);
       }
-      if (p.y > this.map.pixelHeight + 48) {
-        p.respawn(this.particles, this.sparkTexture);
-        this.shake.add(0.2);
+      // Scatto attraverso una brace: la accende alle spalle e allunga lo Scatto
+      if (p.isDashing) {
+        const e = this.embers.emberIn(p.hitbox);
+        if (e) { e.fuse = 0.08; p.extendDash(); }
       }
-    });
+    }
+    this.physics.actors = living.map((p) => p.hitbox);
 
-    // 4. corpi
+    // 4. spiriti
+    for (const i of [0, 1] as const) {
+      const partner = this.players[i === 0 ? 1 : 0];
+      this.spirits[i].update(dt, this.inputs[i], this.map, { x: partner.x, y: partner.y - 8 });
+    }
+    // una brace lanciata che centra lo Sbuffo fa rinascere SOFFIO
+    if (this.spirits[1].active && this.alive[0]) {
+      const s = this.spirits[1];
+      if (this.embers.takeFlyingNear(s.x, s.y, 9)) this.revive(1, this.revivePoint(1, s), s.onBeat, 'ember');
+    }
+
+    // 5. corpi e braci
     for (const { crate, spawn } of this.crates) {
       crate.update(dt, this.physics);
       if (crate.y > this.map.pixelHeight + 48) crate.placeAt(spawn.x, spawn.y);
     }
-    this.ballast.update(dt, this.physics);
-    if (this.ballast.state === 'placed' && this.ballast.y > this.map.pixelHeight + 48) {
-      this.pickUpBallast();
-      this.say('LA ZAVORRA È CADUTA: TORNA A GHISA');
+    for (const ex of this.embers.update(dt, this.physics, this.crates.map((c) => c.crate))) {
+      this.explode(ex);
     }
-    this.bellows.update(dt, this.physics);
-    if (this.bellows.state === 'placed' && this.bellows.y > this.map.pixelHeight + 48) {
-      this.bellows.startRecall();
-      this.physics.remove(this.bellows);
-    }
-    if (this.bellows.state === 'recalling') {
-      const s = this.players[1];
-      if (this.bellows.updateRecall(dt, s.x, s.y - 3)) this.bellows.state = 'carried';
-    }
-    this.carryObjects();
 
-    // 5. piastre e cancelli: conta il peso totale appoggiato
+    // 6. pericoli
+    const standing = living.map((p) => ({ box: p.hitbox, mass: p.mass }));
+    for (const s of this.sheets) {
+      if (s.update(dt, standing)) {
+        fxBus.emit({ type: 'debris', x: s.top.x + s.top.w / 2, y: s.top.y, color: PAL.steel0, count: 8 });
+        this.shake.add(0.15);
+      }
+    }
+    for (const p of living) {
+      if (!this.alive[p.id] || this.invuln[p.id] > 0) continue;
+      const box = p.hitbox;
+      if (this.slag.some((s) => s.kills(box))) this.kill(p.id, 'slag');
+      else if (p.y > this.map.pixelHeight + 32) this.kill(p.id, 'void');
+    }
+    for (const p of living) {
+      if (!this.alive[p.id] || !p.onGround) continue;
+      const box = p.hitbox;
+      if (this.sheets.some((s) => s.supports(box))) continue;
+      if (this.slag.some((s) => s.near(box, 14))) continue;
+      if (this.vents.some((v) => rectsOverlap(box, v.band))) continue;
+      this.lastSafe[p.id] = { x: p.x, y: p.y };
+    }
+
+    // 7. piastre, fornelli e cancelli
     const weights: Weight[] = [
-      ...this.players.map((p) => ({ box: p.hitbox, mass: p.mass })),
+      ...living.map((p) => ({ box: p.hitbox, mass: p.mass })),
       ...this.crates.map(({ crate }) => ({ box: crate.box, mass: crate.mass })),
     ];
-    if (this.ballast.state === 'placed') weights.push({ box: this.ballast.box, mass: this.ballast.mass });
-
     let needsMass = false;
     const open = new Map<string, boolean>();
     for (const { plate, gate } of this.plates) {
       if (plate.update(dt, weights)) open.set(gate, true);
       if (plate.needsMoreMass) needsMass = true;
     }
+    // un cancello a fuoco si apre quando TUTTI i suoi fornelli ardono
+    const fireGates = new Map<string, boolean>();
+    for (const { brazier, gate } of this.braziers) {
+      fireGates.set(gate, (fireGates.get(gate) ?? true) && brazier.lit);
+    }
+    for (const [gate, allLit] of fireGates) if (allLit) open.set(gate, true);
     for (const [ch, gate] of this.gates) gate.update(dt, open.get(ch) ?? false);
     this.fragile?.update(dt, impacts);
 
-    // 6. raccolta e traguardo
-    const boxes: Rect[] = this.players.map((p) => p.hitbox);
+    // 8. forge: si accendono solo se ci arrivate vivi tutti e due
+    if (this.bothAlive) {
+      for (const f of this.forges) {
+        if (f.lit || !living.some((p) => f.touches(p.hitbox))) continue;
+        f.light();
+        this.checkpoint[0] = { x: f.x - 10, y: f.y };
+        this.checkpoint[1] = { x: f.x + 10, y: f.y };
+        fxBus.emit({ type: 'flash', x: f.x, y: f.y - 16, color: PAL.ember3, radius: 90, intensity: 1.4, life: 0.5 });
+        this.say('FORGIA ACCESA: SE CADETE IN DUE, SI RIPARTE DA QUI');
+      }
+    }
+
+    // 9. raccolta e traguardo (servono due corpi vivi)
+    const boxes: Rect[] = living.map((p) => p.hitbox);
     if (this.pickups.update(dt, boxes, this.particles, this.sparkTexture) > 0) {
       this.hud.setGems(this.pickups.collected, this.pickups.total);
       this.shake.add(0.05);
     }
-    if (!this.finished && this.goal && boxes.every((b) => rectsOverlap(b, this.goal!))) {
+    if (!this.finished && this.goal && this.bothAlive && boxes.every((b) => rectsOverlap(b, this.goal!))) {
       this.finished = true;
       this.shake.add(0.5);
       for (const p of this.players) this.burst(p.x, p.y - 10, p.tint, 40);
@@ -329,114 +446,209 @@ export class Game {
 
   /* --- eventi dei personaggi ----------------------------------------- */
 
-  private handleEvents(p: Player, wasOnBellows: boolean): void {
+  private handleEvents(p: Player): void {
     for (const e of p.events.splice(0)) {
       switch (e.type) {
-        case 'jumped':
-          // Saltare da un Mantice carico: lancio con tutta l'energia.
-          if (wasOnBellows && this.bellows.charge > 0.05) {
-            const h = this.bellows.release(p.mass);
-            p.launch(h);
-            this.shake.add(0.3);
-            this.burst(this.bellows.x, this.bellows.y - 6, P2_COLOR, 26);
-          }
-          break;
-        case 'landed':
-          if (this.bellows.state === 'placed' && this.physics.standsOn(p.hitbox, this.bellows)) {
-            const added = this.bellows.absorb(p.mass, e.vy, e.slam);
-            if (added > 0.05) {
-              this.burst(this.bellows.x, this.bellows.y - 6, P2_COLOR, Math.round(8 + added * 24));
-              if (this.bellows.charge >= 0.95) this.say('MANTICE CARICO: CHI È LEGGERO CI SALTI SOPRA');
+        case 'gadget':
+          if (p.role === 'ghisa') {
+            if (!this.embers.throw(p.x, p.y, p.facingDir, p.mass, e.aim, p.onGround, p.vx)) {
+              this.burst(p.x - p.facingDir * 6, p.y - 14, PAL.steel0, 4);
             }
+          } else {
+            const cone = this.embers.blow(p.x, p.y, p.facingDir, p.mass, e.aim);
+            if (cone) this.applyBlow(p, cone);
           }
-          break;
-        case 'object':
-          if (p.role === 'ghisa') this.useBallast(p); else this.useBellows(p);
           break;
         case 'denied':
-          this.say(e.need === 'heavy'
-            ? 'SCHIANTO: GHISA DEVE ESSERE PESANTE'
-            : 'SCATTO: SOFFIO DEVE ESSERE LEGGERO');
+          this.say('SCHIANTO (S IN ARIA): GHISA DEVE ESSERE PESANTE');
           this.burst(p.x, p.y - 10, 0x8b93a8, 6);
+          break;
+        case 'jumped':
+        case 'landed':
           break;
       }
     }
   }
 
-  /* --- oggetti -------------------------------------------------------- */
-
-  private useBallast(p: Player): void {
-    const b = this.ballast;
-    if (b.state === 'carried') {
-      const spot = this.findSpot(p, b.w, b.h);
-      if (!spot) { this.say('NON C’È SPAZIO PER POSARE LA ZAVORRA'); return; }
-      b.state = 'placed';
-      b.placeAt(spot.x, spot.y);
-      b.mass = this.mass.depositBallast();
-      this.physics.add(b);
-      this.shake.add(0.12 + b.mass * 0.3);
-      this.burst(spot.x, spot.y - 4, P1_COLOR, 14);
-      if (b.mass < 0.05) this.say('ZAVORRA VUOTA: GHISA ERA GIÀ LEGGERO');
-      return;
+  /** Il Tiraggio spinge chi è leggero e le casse, e riattizza il Tizzone. */
+  private applyBlow(from: Player, cone: Cone): void {
+    fxBus.emit({
+      type: 'puff', x: cone.ox + cone.dx * 10, y: cone.oy + cone.dy * 10, count: 8,
+      color: PAL.air3, dir: cone.dx || 1,
+    });
+    const other = this.players[from.id === 0 ? 1 : 0];
+    if (this.alive[other.id] && cone.along(other.x, other.y - 8) >= 0) {
+      const s = 420 * (1 - other.mass);
+      other.blast(cone.dx * s, cone.dy * s - (cone.dy === 0 ? 90 * (1 - other.mass) : 0));
     }
-    if (this.near(p, b)) { this.pickUpBallast(); return; }
-    this.say('LA ZAVORRA PESA TROPPO PER RICHIAMARLA:\nTORNA A PRENDERLA');
+    for (const { crate } of this.crates) {
+      if (cone.dy === 0 && cone.along(crate.x, crate.y - 8) >= 0) {
+        crate.vx = cone.dx * (from.mass >= MassSystem.HEAVY ? 230 : 140);
+      }
+    }
+    const t = this.spirits[0];
+    if (t.active) {
+      const d = cone.along(t.x, t.y);
+      if (d >= 0 && d <= GADGET_REVIVE_RANGE) this.revive(0, this.revivePoint(0, t), t.onBeat, 'blow');
+    }
   }
 
-  private pickUpBallast(): void {
-    this.physics.remove(this.ballast);
-    this.mass.withdrawBallast();
-    this.ballast.state = 'carried';
-    this.ballast.mass = 0;
-    this.carryObjects();
+  /** Uno scoppio: spinge, accende le micce, abbatte la loppa, accende i fornelli. */
+  private explode(ex: Explosion): void {
+    const big = ex.size === 'big' ? 1 : ex.size === 'mid' ? 0.7 : 0.45;
+    fxBus.emit({ type: 'flash', x: ex.x, y: ex.y, color: PAL.ember3, radius: ex.radius * 2.4, intensity: 1.7, life: 0.3 });
+    fxBus.emit({ type: 'ring', x: ex.x, y: ex.y, color: PAL.ember2, radius: ex.radius, life: 0.35 });
+    fxBus.emit({ type: 'sparks', x: ex.x, y: ex.y, color: PAL.ember3, count: 12 + Math.round(big * 10) });
+    let owner: 0 | 1 = 0;
+    let best = Infinity;
+    for (const p of this.players) {
+      const d = Math.hypot(p.x - ex.x, p.y - ex.y);
+      if (this.alive[p.id] && d < best) { best = d; owner = p.id; }
+    }
+    fxBus.emit({ type: 'shock', x: ex.x, y: ex.y, strength: 0.5 + big * 0.5, owner });
+    this.shake.add(0.14 + big * 0.18);
+
+    for (const p of this.players) {
+      if (!this.alive[p.id]) continue;
+      const cx = p.x, cy = p.y - 8;
+      const d = Math.hypot(cx - ex.x, cy - ex.y);
+      if (d > ex.radius + 6) continue;
+      // sempre almeno per metà verso l'alto: lo scoppio è un trampolino
+      const nx = d < 4 ? 0 : (cx - ex.x) / d;
+      const ny = d < 4 ? -1 : (cy - ex.y) / d;
+      const up = Math.max(-ny, 0.5);
+      const speed = BLAST_SPEED * (1 - p.mass);
+      p.blast(nx * speed * 0.85, -up * speed);
+    }
+
+    // le micce arrivano un po' più in là dello scoppio stesso
+    this.embers.igniteNear(ex.x, ex.y, ex.radius * 1.25, EmberSystem.CHAIN_DELAY);
+
+    for (const { crate } of this.crates) {
+      const d = Math.hypot(crate.x - ex.x, crate.y - 8 - ex.y);
+      if (d < ex.radius * 1.2) crate.shove(ex.x, 1 - d / (ex.radius * 1.2));
+    }
+    for (const b of this.slagWall?.blast(ex.x, ex.y, ex.radius) ?? []) {
+      fxBus.emit({ type: 'debris', x: b.x, y: b.y, color: 0x6a5a4c, count: 7, up: 1 });
+      this.shake.add(0.1);
+    }
+    for (const { brazier } of this.braziers) {
+      if (brazier.tryLight(ex.x, ex.y, ex.radius)) {
+        fxBus.emit({ type: 'flash', x: brazier.x, y: brazier.y - 14, color: PAL.ember2, radius: 60, intensity: 1.2, life: 0.4 });
+        const left = this.braziers.filter((b) => !b.brazier.lit).length;
+        this.say(left > 0 ? `FORNELLO ACCESO: NE MANCANO ${left}` : 'FORNELLI ACCESI: IL CANCELLO SI APRE');
+      }
+    }
+    const s = this.spirits[1];
+    if (s.active && Math.hypot(s.x - ex.x, s.y - ex.y) <= ex.radius + 6) {
+      this.revive(1, this.revivePoint(1, s), s.onBeat, 'ember');
+    }
   }
 
-  private useBellows(p: Player): void {
-    const m = this.bellows;
-    if (m.state === 'recalling') return;
-    if (m.state === 'carried') {
-      const spot = this.findSpot(p, m.w, m.h);
-      if (!spot) { this.say('NON C’È SPAZIO PER POSARE IL MANTICE'); return; }
-      m.state = 'placed';
-      m.placeAt(spot.x, spot.y);
-      m.charge = 0;
-      this.physics.add(m);
-      this.burst(spot.x, spot.y - 4, P2_COLOR, 10);
+  /* --- morte e rinascita --------------------------------------------- */
+
+  private kill(i: 0 | 1, cause: 'slag' | 'void'): void {
+    if (!this.alive[i]) return;
+    const p = this.players[i];
+    this.alive[i] = false;
+    this.deaths++;
+    p.view.visible = false;
+    const color = ROLE_COLORS[p.role].main;
+    fxBus.emit({ type: 'flash', x: p.x, y: p.y - 8, color, radius: 80, intensity: 1.5, life: 0.4 });
+    fxBus.emit({ type: 'debris', x: p.x, y: p.y - 8, color, count: 12, up: 1 });
+    fxBus.emit({ type: 'shock', x: p.x, y: p.y - 8, strength: 0.8, owner: i });
+    if (cause === 'slag') fxBus.emit({ type: 'sparks', x: p.x, y: p.y, color: PAL.ember3, count: 16, up: true });
+    this.shake.add(0.45);
+    this.hitstop = DEATH_HITSTOP;
+
+    const safe = this.lastSafe[i];
+    // un po' sopra i piedi: la scatola dello spirito non deve toccare il pavimento
+    this.spirits[i].spawn(safe.x, safe.y - 20);
+
+    const other = i === 0 ? 1 : 0;
+    if (!this.alive[other]) {
+      this.loss = 0;
+      this.say('COLATA PERSA', 1.2);
       return;
     }
-    this.physics.remove(m);
-    if (this.near(p, m)) {
-      m.state = 'carried';
-      m.charge = 0;
-      this.carryObjects();
+    this.say(i === 0
+      ? 'GHISA È CADUTO: PORTA IL TIZZONE DA SOFFIO'
+      : 'SOFFIO È CADUTO: PORTA LO SBUFFO DA GHISA', 2.2);
+  }
+
+  /** Accordo di rinascita: spirito vicino al compagno, Q e . insieme. */
+  private tryChordRevive(): void {
+    const dead: 0 | 1 = this.alive[0] ? 1 : 0;
+    const livingId: 0 | 1 = dead === 0 ? 1 : 0;
+    if (!this.alive[livingId]) return;
+    const s = this.spirits[dead];
+    const l = this.players[livingId];
+    if (!s.active || Math.hypot(s.x - l.x, s.y - (l.y - 8)) > REVIVE_RANGE) return;
+    if (!this.chord.inSync) return;
+    this.chord.consume();
+    this.revive(dead, { x: l.x, y: l.y }, s.onBeat, 'chord');
+  }
+
+  /** Dove rinasce chi viene rianimato a distanza: lì se è sicuro, altrimenti all'ultimo punto sicuro. */
+  private revivePoint(i: 0 | 1, s: Spirit): Point {
+    const feet = { x: s.x, y: s.y + 8 };
+    const box: Rect = { x: feet.x - 6, y: feet.y - 16, w: 12, h: 16 };
+    const inside = this.physics.overlapsSolid(box) || this.slag.some((p) => p.kills(box));
+    let ground = false;
+    const tx = Math.floor(feet.x / TILE);
+    for (let ty = Math.floor(feet.y / TILE); ty < Math.floor(feet.y / TILE) + 9; ty++) {
+      if (this.map.isSolid(tx, ty) || this.map.isOneWay(tx, ty)) { ground = true; break; }
+      if (this.slag.some((p) => p.kills({ x: feet.x - 1, y: ty * TILE, w: 2, h: TILE }))) break;
+    }
+    return !inside && ground ? feet : { ...this.lastSafe[i] };
+  }
+
+  private revive(i: 0 | 1, at: Point, perfect: boolean, kind: 'chord' | 'blow' | 'ember'): void {
+    if (this.alive[i]) return;
+    const p = this.players[i];
+    this.alive[i] = true;
+    this.spirits[i].hide();
+    p.placeAt(at.x, at.y);
+    p.view.visible = true;
+    this.invuln[i] = perfect ? 1 : 0.6;
+    const color = ROLE_COLORS[p.role].main;
+
+    if (kind === 'ember') p.blast(0, -280);
+    fxBus.emit({ type: 'flash', x: at.x, y: at.y - 8, color: kind === 'blow' ? PAL.ember3 : color, radius: 70, intensity: 1.4, life: 0.4 });
+    fxBus.emit({ type: 'ring', x: at.x, y: at.y - 8, color, radius: perfect ? 46 : 26, life: 0.4 });
+    this.burst(at.x, at.y - 8, color, perfect ? 36 : 18);
+
+    if (perfect) {
+      this.perfectRevives++;
+      this.embers.refill();
+      this.embers.blowCooldown = 0;
+      for (const q of this.players) q.refreshAbility();
+      for (const { crate } of this.crates) {
+        const d = Math.hypot(crate.x - at.x, crate.y - at.y);
+        if (d < 50) crate.shove(at.x, 1 - d / 50);
+      }
+      this.shake.add(0.3);
+      this.say('RINASCITA PERFETTA!', 1.4);
     } else {
-      // È leggero: SOFFIO lo richiama da qualsiasi distanza, ma perde la carica.
-      m.startRecall();
+      this.say('DI NUOVO IN DUE', 1.2);
     }
   }
 
-  private near(p: Player, o: { x: number; y: number }): boolean {
-    return Math.abs(p.x - o.x) <= PICKUP_RANGE_X && Math.abs(p.y - o.y) <= PICKUP_RANGE_Y;
-  }
-
-  /** Davanti al personaggio se c'è posto, altrimenti dietro. */
-  private findSpot(p: Player, w: number, h: number): { x: number; y: number } | null {
-    const facing = p.facingDir;
-    for (const dir of [facing, -facing]) {
-      const x = Math.round(p.x + dir * (6 + w / 2 + 1));
-      const box: Rect = { x: x - w / 2, y: p.y - h, w, h };
-      // deve poggiare su qualcosa, non restare sospeso sul vuoto
-      const below: Rect = { x: box.x, y: p.y, w, h: 2 };
-      if (this.physics.isFree(box) && this.physics.overlapsSolid(below)) return { x, y: p.y };
+  private restartFromCheckpoint(): void {
+    this.loss = -1;
+    this.lossOut = 0.5;
+    for (const i of [0, 1] as const) {
+      this.alive[i] = true;
+      this.spirits[i].hide();
+      const c = this.checkpoint[i];
+      this.players[i].placeAt(c.x, c.y);
+      this.players[i].view.visible = true;
+      this.lastSafe[i] = { ...c };
+      this.invuln[i] = 1;
     }
-    return null;
-  }
-
-  /** Gli oggetti trasportati seguono chi li porta. */
-  private carryObjects(): void {
-    const [g, s] = this.players;
-    if (this.ballast.state === 'carried') this.ballast.carryAt(g.x, g.y, g.facingDir);
-    if (this.bellows.state === 'carried') this.bellows.carryAt(s.x, s.y, s.facingDir);
+    this.embers.clear();
+    this.embers.refill();
+    this.say(this.forges.some((f) => f.lit) ? 'DI NUOVO DALLA FORGIA' : 'DI NUOVO DALL’INIZIO', 1.4);
   }
 
   private burst(x: number, y: number, tint: number, count: number): void {
@@ -453,23 +665,30 @@ export class Game {
     if (this.flash && this.time > this.flash.until) this.flash = null;
 
     let text: string | null = null;
-    if (this.finished) text = 'INSIEME. FINE DEL LIVELLO.';
-    else if (this.flash) text = this.flash.text;
+    if (this.finished) {
+      text = `INSIEME. FINE DEL LIVELLO.\nCADUTE ${this.deaths}  ·  RINASCITE PERFETTE ${this.perfectRevives}`;
+    } else if (this.flash) text = this.flash.text;
+    else if (!this.bothAlive && this.reviveReady()) text = 'Q + . INSIEME PER RINASCERE\nSUL BATTITO DELLO SPIRITO È PERFETTA';
     else if (needsMass) text = 'PESO INSUFFICIENTE SULLA PIASTRA';
     else if (liftedTooHeavy) text = 'TROPPO PESANTE PER LA CORRENTE';
     else text = this.nearestHint();
 
     if (text) this.hud.showPrompt(text); else this.hud.hidePrompt();
 
-    const b = this.ballast;
-    this.hud.setObjectStatus(0, b.state === 'carried'
-      ? 'ZAVORRA IN SPALLA'
-      : `ZAVORRA POSATA  ${Math.round(b.mass * 100)}%`);
-    const m = this.bellows;
-    this.hud.setObjectStatus(1, m.state === 'carried'
-      ? 'MANTICE IN MANO'
-      : m.state === 'recalling' ? 'MANTICE IN VOLO'
-        : `MANTICE POSATO  CARICA ${Math.round(m.charge * 100)}%`);
+    const r = this.embers.reserve;
+    this.hud.setObjectStatus(0, this.alive[0]
+      ? `BRACI ${r}/${EmberSystem.RESERVE}`
+      : 'TIZZONE: RAGGIUNGI SOFFIO');
+    this.hud.setObjectStatus(1, this.alive[1]
+      ? (this.embers.blowCooldown > 0 ? 'TIRAGGIO ...' : 'TIRAGGIO PRONTO')
+      : 'SBUFFO: RAGGIUNGI GHISA');
+  }
+
+  private reviveReady(): boolean {
+    const dead: 0 | 1 = this.alive[0] ? 1 : 0;
+    const l = this.players[dead === 0 ? 1 : 0];
+    const s = this.spirits[dead];
+    return s.active && this.alive[l.id] && Math.hypot(s.x - l.x, s.y - (l.y - 8)) <= REVIVE_RANGE;
   }
 
   private nearestHint(): string | null {
@@ -487,26 +706,41 @@ export class Game {
   /* --- disegno -------------------------------------------------------- */
 
   render(alpha: number, frameDelta: number, fps: number): void {
-    for (const p of this.players) p.draw(alpha, this.time);
+    for (const p of this.players) if (this.alive[p.id]) p.draw(alpha, this.time);
     for (const { plate } of this.plates) plate.draw(this.time);
     for (const g of this.gates.values()) g.draw(this.time);
     this.fragile?.draw(this.time);
+    this.slagWall?.draw(this.time);
+    for (const s of this.slag) s.draw(this.time);
+    for (const s of this.sheets) s.draw(this.time);
+    for (const v of this.vents) v.draw(this.time);
+    for (const { brazier } of this.braziers) brazier.draw(this.time, frameDelta);
+    for (const f of this.forges) f.draw(this.time, frameDelta);
     this.updraft?.draw(this.time, this.particles, this.sparkTexture, frameDelta);
     for (const { crate } of this.crates) crate.draw(alpha, this.time);
-    this.ballast.draw(alpha, this.time);
-    this.bellows.draw(alpha, this.time);
+    this.embers.draw(this.time);
+
+    this.reserveGfx.clear();
+    const g = this.players[0];
+    if (this.alive[0]) this.embers.drawReserve(this.reserveGfx, g.view.x, g.view.y, g.facingDir, this.time);
+    const ready = this.reviveReady();
+    this.spirits.forEach((s) => s.draw(alpha, this.time, ready));
 
     this.hud.setMass(
       frameDelta, this.mass.m1, this.mass.ballast, this.mass.m2,
       MassSystem.HEAVY, MassSystem.LIGHT, this.mass.invertFlash,
     );
+    const lossAlpha = this.loss >= 0 ? Math.min(1, this.loss / (LOSS_FADE * 0.6)) : this.lossOut / 0.5;
+    this.hud.setLoss(lossAlpha);
     this.hud.update(frameDelta);
     this.shake.update(frameDelta, this.time);
 
     const bounds = { w: this.map.pixelWidth, h: this.map.pixelHeight };
     this.followers.forEach((f, i) => {
       const p = this.players[i]!;
-      f.update(frameDelta, p.focusX, p.focusY, p.vx, p.vy);
+      const s = this.spirits[i]!;
+      if (this.alive[i]) f.update(frameDelta, p.focusX, p.focusY, p.vx, p.vy);
+      else f.update(frameDelta, s.x, s.y, 0, 0);
     });
 
     this.split.update(
@@ -530,6 +764,7 @@ export class Game {
   }
 
   present(renderer: Renderer): void {
+    for (const p of this.players) p.alive = this.alive[p.id];
     this.gfx.present(renderer, {
       time: this.time, players: this.players, shake: this.shake,
       invertFlash: this.mass.invertFlash, finished: this.finished, goal: this.goal,
@@ -541,17 +776,19 @@ export class Game {
     return {
       game: this as unknown as Record<string, unknown>,
       teleport: (who: 0 | 1, x: number, y: number): void => { this.players[who].placeAt(x, y); },
-      /** Imposta le masse dei due giocatori (la Zavorra resta com'è). */
+      /** Imposta la massa di GHISA; SOFFIO prende il resto. */
       setMass: (m1: number): void => {
         const pool = 1 - this.mass.ballast;
         this.mass.m1 = Math.min(Math.max(m1, MassSystem.MIN), pool - MassSystem.MIN);
         this.mass.m2 = pool - this.mass.m1;
       },
+      kill: (who: 0 | 1): void => this.kill(who, 'slag'),
+      alive: this.alive,
+      spirits: this.spirits,
       players: this.players,
       mass: this.mass,
+      embers: this.embers,
       physics: this.physics,
-      ballast: this.ballast,
-      bellows: this.bellows,
       crates: this.crates.map((c) => c.crate),
       split: this.split,
       map: this.map,

@@ -130,6 +130,10 @@ export class PlayerInput {
 
   consumeAbility(): void { this.kb.consumePress(this.binding.b); }
 
+  /** Da quanti secondi è stato premuto "giù" (Infinity se mai). */
+  sinceDownPress(): number { return this.kb.sincePress(this.binding.down); }
+  consumeDown(): void { this.kb.consumePress(this.binding.down); }
+
   label(slot: keyof Binding): string {
     const code = this.binding[slot];
     return KEY_LABELS[code] ?? code;
