@@ -13,8 +13,10 @@ export interface SolidBody {
 }
 
 export interface Pushable extends SolidBody {
-  /** Massa minima di chi spinge: sotto questa soglia il corpo non si muove. */
+  /** Massa minima di chi spinge, per ogni corpo spinto. */
   readonly minPusherMass: number;
+  /** Quanti corpi ha mosso l'ultima spinta riuscita (una fila di casse pesa di più). */
+  readonly lastChain: number;
   /** Prova a spostarsi di `dx`; ritorna lo spostamento effettivo. */
   push(dx: number, pusherMass: number): number;
 }
@@ -37,6 +39,8 @@ export class Physics implements Collider {
   readonly bodies: SolidBody[] = [];
   /** Hitbox dei giocatori, aggiornate a ogni passo: ostacoli per i corpi. */
   actors: Rect[] = [];
+  /** Chi sta spingendo cosa in questo passo: i pesi di chi spinge insieme si sommano. */
+  private readonly pushers = new Map<Pushable, { left: number; right: number }>();
 
   constructor(readonly map: Tilemap) {}
 
@@ -83,11 +87,27 @@ export class Physics implements Collider {
     return best;
   }
 
-  pushableAt(box: Rect): Pushable | null {
+  pushableAt(box: Rect, ignore?: unknown): Pushable | null {
     for (const b of this.bodies) {
+      if (b === ignore) continue;
       if (isPushable(b) && b.solidKind === 'full' && rectsOverlap(b.box, box)) return b;
     }
     return null;
+  }
+
+  clearPushers(): void { this.pushers.clear(); }
+
+  addPusher(body: Pushable, dir: number, mass: number): void {
+    const entry = this.pushers.get(body) ?? { left: 0, right: 0 };
+    if (dir < 0) entry.left += mass; else entry.right += mass;
+    this.pushers.set(body, entry);
+  }
+
+  /** Massa totale di chi spinge `body` nel verso `dir` in questo passo. */
+  pushersMass(body: Pushable, dir: number): number {
+    const entry = this.pushers.get(body);
+    if (!entry) return 0;
+    return dir < 0 ? entry.left : entry.right;
   }
 
   /** Vero se i piedi di `box` poggiano esattamente sul corpo `body`. */

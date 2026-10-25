@@ -43,9 +43,13 @@ accumulata, e a parità di energia più è leggero più vola. Chi pesa lo carica
 chi è leggero lo usa. È leggero: SOFFIO lo richiama da qualsiasi distanza,
 ma così perde la carica.
 
-**CASSE** — pesano 0,35. Si spingono solo se non si è troppo leggeri (chi è
-pesante le spinge più svelto). Le piastre sommano il peso di tutto ciò che ci
-sta sopra: due casse bastano, oppure una cassa più un giocatore leggero.
+**CASSE** — pesano 0,35. Per spingerle serve un peso di 0,3 per ogni cassa
+della fila: due casse a contatto si spingono insieme e chiedono 0,6, e se si
+spinge in due dallo stesso lato i pesi si sommano. Chi è pesante le spinge più
+svelto. Lo Schianto di GHISA vicino a una cassa la sbalza via: è il modo di
+separarne due incastrate contro un muro. Le piastre sommano il peso di tutto
+ciò che ci sta sopra: due casse bastano, oppure una cassa più un giocatore
+leggero.
 
 ## Avvio
 

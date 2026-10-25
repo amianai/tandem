@@ -132,6 +132,8 @@ export class Player {
   get isGliding(): boolean { return this.gliding; }
   /** -1 o 1: verso cui guarda il personaggio. */
   get facingDir(): number { return this.facing; }
+  /** -1, 0, 1: dove il giocatore sta cercando di andare (serve a sommare le spinte). */
+  get moveIntent(): number { return this.input.moveX; }
 
   /** L'urto va letto una volta sola: il gioco lo consuma e lo trasforma in onda. */
   takeImpact(): SlamImpact | null {
@@ -388,7 +390,8 @@ export class Player {
         const crate = this.onGround ? map.pushableAt(box) : null;
         if (crate && crate.push(step * move, this.mass) !== 0 && !map.overlapsSolid(box)) {
           this.x = nextX;
-          this.pushDrag = lerp(0.35, 0.75, this.mass);
+          // una fila di casse si spinge più piano di una cassa sola
+          this.pushDrag = lerp(0.35, 0.75, this.mass) / Math.max(1, crate.lastChain * 0.75);
           continue;
         }
         this.vx = 0; this.dashTimer = 0; return;

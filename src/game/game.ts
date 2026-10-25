@@ -235,6 +235,16 @@ export class Game {
 
     // 3. personaggi
     this.physics.actors = this.players.map((p) => p.hitbox);
+    // Chi preme contro una cassa da terra conta come spinta: se lo fanno in
+    // due dallo stesso lato, i pesi si sommano.
+    this.physics.clearPushers();
+    for (const p of this.players) {
+      const dir = p.moveIntent;
+      if (!p.onGround || dir === 0) continue;
+      const box = p.hitbox;
+      const body = this.physics.pushableAt({ ...box, x: box.x + dir });
+      if (body) this.physics.addPusher(body, dir, p.mass);
+    }
     const onBellows = this.players.map((p) =>
       this.bellows.state === 'placed' && this.physics.standsOn(p.hitbox, this.bellows));
     const fx = { dust: this.dustTexture, spark: this.sparkTexture };

@@ -95,8 +95,9 @@ export class Crate extends Body implements Pushable {
   /** Una cassa pesa un po' più di un terzo della massa totale. */
   static readonly MASS = 0.35;
   readonly mass = Crate.MASS;
-  /** Chi è sotto questa soglia ci sbatte contro e basta. */
+  /** Peso minimo di chi spinge, per ogni cassa della fila. */
   readonly minPusherMass = 0.3;
+  lastChain = 1;
   private physics: Physics | null = null;
   private readonly art = new CassaView();
 
@@ -110,9 +111,34 @@ export class Crate extends Body implements Pushable {
     this.simulate(dt, physics);
   }
 
+  /**
+   * Le casse a contatto nel verso della spinta si muovono tutte insieme:
+   * senza questo due casse accostate diventavano un muro inamovibile, perché
+   * ognuna aspettava che l'altra si spostasse. Serve un peso proporzionale
+   * alla fila (0,3 per cassa) e chi spinge insieme somma il proprio peso.
+   */
   push(dx: number, pusherMass: number): number {
-    if (!this.physics || pusherMass < this.minPusherMass) return 0;
-    return this.moveX(dx, this.physics);
+    const physics = this.physics;
+    if (!physics || dx === 0) return 0;
+    const dir = Math.sign(dx);
+
+    const chain: Crate[] = [this];
+    for (let cur: Crate = this; chain.length < 6;) {
+      const next = physics.pushableAt(cur.boxAt(cur.x + dir, cur.y), cur);
+      if (!(next instanceof Crate) || chain.includes(next)) break;
+      chain.push(next);
+      cur = next;
+    }
+
+    const mass = Math.max(pusherMass, physics.pushersMass(this, dir));
+    if (mass < this.minPusherMass * chain.length) return 0;
+
+    // Prima la cassa in testa: se lei è contro un muro non si muove nessuna.
+    const moved = chain[chain.length - 1]!.moveX(dx, physics);
+    if (moved === 0) return 0;
+    for (let i = chain.length - 2; i >= 0; i--) chain[i]!.moveX(moved, physics);
+    this.lastChain = chain.length;
+    return moved;
   }
 
   /** Onda d'urto dello Schianto: la cassa viene sbalzata via. */
