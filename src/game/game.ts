@@ -16,7 +16,8 @@ import {
   FragileFloor, Gate, HeavyPlate, horizontalRuns, toTile, Updraft, type Weight,
 } from './elements';
 import { EmberSystem, type Cone, type Explosion } from './embers';
-import { Brazier, Forge, Sheet, SlagPool, SlagWall, Vent } from './hazards';
+import { Crawler } from './enemies';
+import { Brazier, Forge, Hammer, HAMMER_FAST, HAMMER_SLOW, Sheet, SlagPool, SlagWall, Vent } from './hazards';
 import { MassSystem } from './mass';
 import { Crate } from './objects';
 import { Physics } from './physics';
@@ -74,6 +75,10 @@ export class Game {
   private readonly vents: Vent[] = [];
   private readonly sheets: Sheet[] = [];
   private readonly forges: Forge[] = [];
+  private readonly hammers = new Map<string, Hammer>();
+  private readonly crawlers: Crawler[] = [];
+  /** Istante (tempo di gioco) in cui entrambi hanno toccato la bandiera. */
+  finishedAt = -1;
   private readonly updraft: Updraft | null;
   private readonly goal: Rect | null;
   private readonly hints: { x: number; y: number; text: string }[] = [];
@@ -120,7 +125,17 @@ export class Game {
     const links = level.links ?? {};
     const brazierChars = level.braziers ?? '';
 
+    let hammerIndex = 0;
+    for (const [ch, pace] of Object.entries(level.hammers ?? {})) {
+      const tiles = tilesOf(ch);
+      if (tiles.length) {
+        this.hammers.set(ch, new Hammer(this.map, tiles, pace === 'fast' ? HAMMER_FAST : HAMMER_SLOW, hammerIndex++ * 0.37));
+      }
+    }
+    for (const m of this.map.markers.get('Z') ?? []) this.crawlers.push(new Crawler(m.x, m.y));
+
     for (const gateChar of new Set(Object.values(links))) {
+      if (this.hammers.has(gateChar)) continue;
       const tiles = tilesOf(gateChar);
       if (tiles.length) {
         const latch = (level.latching ?? '').includes(gateChar);
@@ -182,8 +197,12 @@ export class Game {
 
     this.pickups = new Pickups(this.map.markers.get('*') ?? [], sheets.terrain[TILES.gem]!);
 
-    for (const p of this.map.markers.get('C') ?? []) {
-      const crate = new Crate();
+    const crateMarkers = [
+      ...(this.map.markers.get('C') ?? []).map((p) => ({ p, mass: Crate.MASS })),
+      ...(this.map.markers.get('D') ?? []).map((p) => ({ p, mass: Crate.INGOT })),
+    ];
+    for (const { p, mass } of crateMarkers) {
+      const crate = new Crate(mass);
       crate.placeAt(p.x, p.y);
       this.physics.add(crate);
       this.crates.push({ crate, spawn: { x: p.x, y: p.y } });
@@ -215,6 +234,8 @@ export class Game {
     for (const { brazier } of this.braziers) this.world.addChild(brazier.container);
     for (const f of this.forges) this.world.addChild(f.container);
     for (const v of this.vents) this.world.addChild(v.container);
+    for (const h of this.hammers.values()) this.world.addChild(h.container);
+    for (const c of this.crawlers) this.world.addChild(c.view);
     this.world.addChild(this.pickups.container);
     for (const { crate } of this.crates) this.world.addChild(crate.view);
     this.world.addChild(
@@ -342,6 +363,12 @@ export class Game {
           const d = Math.abs(crate.x - impact.x);
           if (d < 64 && Math.abs(crate.y - impact.y) < 24) crate.shove(impact.x, 1 - d / 64);
         }
+        for (const c of this.crawlers) {
+          if (c.alive && Math.abs(c.x - impact.x) < 48 && Math.abs(c.y - impact.y) < 24) {
+            c.stun = 1.6;
+            c.blast(Math.sign(c.x - impact.x || 1) * 90, -120);
+          }
+        }
         // Schianto incendiario: accende le braci a terra lì intorno
         this.embers.igniteNear(impact.x, impact.y - 4, 3 * TILE, 0.05);
       }
@@ -373,6 +400,27 @@ export class Game {
       this.explode(ex);
     }
 
+    // magli: bloccati dalla loro piastra; quello che schiacciano scoppia
+    for (const [ch, h] of this.hammers) {
+      const locked = this.plates.some(({ plate, gate }) => gate === ch && plate.active);
+      if (h.update(dt, locked)) {
+        this.embers.igniteNear(h.x + h.w / 2, h.bottom - 4, h.w / 2 + 6, 0.01);
+        fxBus.emit({ type: 'puff', x: h.x + h.w / 2, y: h.bottom, count: 8, color: PAL.steel1 });
+        const near = this.players.some((p) => this.alive[p.id] && Math.abs(p.x - (h.x + h.w / 2)) < 160);
+        if (near) this.shake.add(0.12);
+      }
+    }
+    for (const c of this.crawlers) {
+      if (!c.alive) continue;
+      c.update(dt, this.map);
+      if (this.slag.some((s) => s.kills(c.box)) || c.y > this.map.pixelHeight + 32
+          || [...this.hammers.values()].some((h) => h.kills(c.box))) {
+        c.alive = false;
+        fxBus.emit({ type: 'sparks', x: c.x, y: c.y - 4, color: PAL.ember3, count: 14, up: true });
+        fxBus.emit({ type: 'flash', x: c.x, y: c.y - 4, color: PAL.ember2, radius: 50, intensity: 1, life: 0.3 });
+      }
+    }
+
     // 6. pericoli
     const standing = living.map((p) => ({ box: p.hitbox, mass: p.mass }));
     for (const s of this.sheets) {
@@ -386,6 +434,8 @@ export class Game {
       const box = p.hitbox;
       if (this.slag.some((s) => s.kills(box))) this.kill(p.id, 'slag');
       else if (p.y > this.map.pixelHeight + 32) this.kill(p.id, 'void');
+      else if ([...this.hammers.values()].some((h) => h.kills(box))) this.kill(p.id, 'crush');
+      else if (this.crawlers.some((c) => c.alive && rectsOverlap(c.box, box))) this.kill(p.id, 'burn');
     }
     for (const p of living) {
       if (!this.alive[p.id] || !p.onGround) continue;
@@ -393,6 +443,8 @@ export class Game {
       if (this.sheets.some((s) => s.supports(box))) continue;
       if (this.slag.some((s) => s.near(box, 14))) continue;
       if (this.vents.some((v) => rectsOverlap(box, v.band))) continue;
+      if ([...this.hammers.values()].some((h) => box.x < h.x + h.w + 6 && box.x + box.w > h.x - 6)) continue;
+      if (this.crawlers.some((c) => c.alive && Math.abs(c.x - p.x) < 40 && Math.abs(c.y - p.y) < 30)) continue;
       this.lastSafe[p.id] = { x: p.x, y: p.y };
     }
 
@@ -436,6 +488,7 @@ export class Game {
     }
     if (!this.finished && this.goal && this.bothAlive && boxes.every((b) => rectsOverlap(b, this.goal!))) {
       this.finished = true;
+      this.finishedAt = this.time;
       this.shake.add(0.5);
       for (const p of this.players) this.burst(p.x, p.y - 10, p.tint, 40);
     }
@@ -477,13 +530,24 @@ export class Game {
       color: PAL.air3, dir: cone.dx || 1,
     });
     const other = this.players[from.id === 0 ? 1 : 0];
-    if (this.alive[other.id] && cone.along(other.x, other.y - 8) >= 0) {
+    // Il compagno viene spinto solo se è in aria: chi plana può essere
+    // soffiato oltre un baratro; chi è a terra (magari sopra una brace che
+    // sta per fare da razzo) resta dov'è.
+    if (this.alive[other.id] && !other.onGround && cone.along(other.x, other.y - 8) >= 0) {
       const s = 420 * (1 - other.mass);
       other.blast(cone.dx * s, cone.dy * s - (cone.dy === 0 ? 90 * (1 - other.mass) : 0));
     }
     for (const { crate } of this.crates) {
       if (cone.dy === 0 && cone.along(crate.x, crate.y - 8) >= 0) {
         crate.vx = cone.dx * (from.mass >= MassSystem.HEAVY ? 230 : 140);
+      }
+    }
+    for (const c of this.crawlers) {
+      if (c.alive && cone.along(c.x, c.y - 5) >= 0) {
+        // getto leggero = lungo ma debole; pesante = corto ma potente
+        const s = 300 + 260 * from.mass;
+        // niente sollevamento: scivola a terra e cade nel primo vuoto che incontra
+        c.blast(cone.dx * s, cone.dy * s);
       }
     }
     const t = this.spirits[0];
@@ -513,15 +577,27 @@ export class Game {
       const cx = p.x, cy = p.y - 8;
       const d = Math.hypot(cx - ex.x, cy - ex.y);
       if (d > ex.radius + 6) continue;
-      // sempre almeno per metà verso l'alto: lo scoppio è un trampolino
-      const nx = d < 4 ? 0 : (cx - ex.x) / d;
-      const ny = d < 4 ? -1 : (cy - ex.y) / d;
+      // Brace sotto i piedi = razzo dritto in alto, senza deriva laterale.
+      // Altrimenti sempre almeno per metà verso l'alto: è un trampolino.
+      const underFeet = Math.abs(ex.x - p.x) <= 9 && ex.y >= p.y - 6;
+      const nx = d < 4 || underFeet ? 0 : (cx - ex.x) / d;
+      const ny = d < 4 || underFeet ? -1 : (cy - ex.y) / d;
       const up = Math.max(-ny, 0.5);
       const speed = BLAST_SPEED * (1 - p.mass);
       p.blast(nx * speed * 0.85, -up * speed);
     }
 
     // le micce arrivano un po' più in là dello scoppio stesso
+    for (const c of this.crawlers) {
+      if (!c.alive) continue;
+      const cx = c.x, cy = c.y - 5;
+      const d = Math.hypot(cx - ex.x, cy - ex.y);
+      if (d > ex.radius + 6) continue;
+      const nx = d < 4 ? 0 : (cx - ex.x) / d;
+      const ny = d < 4 ? -1 : (cy - ex.y) / d;
+      const speed = BLAST_SPEED * (1 - Crawler.MASS);
+      c.blast(nx * speed * 0.85, -Math.max(-ny, 0.5) * speed);
+    }
     this.embers.igniteNear(ex.x, ex.y, ex.radius * 1.25, EmberSystem.CHAIN_DELAY);
 
     for (const { crate } of this.crates) {
@@ -547,7 +623,7 @@ export class Game {
 
   /* --- morte e rinascita --------------------------------------------- */
 
-  private kill(i: 0 | 1, cause: 'slag' | 'void'): void {
+  private kill(i: 0 | 1, cause: 'slag' | 'void' | 'crush' | 'burn'): void {
     if (!this.alive[i]) return;
     const p = this.players[i];
     this.alive[i] = false;
@@ -714,6 +790,8 @@ export class Game {
     for (const s of this.slag) s.draw(this.time);
     for (const s of this.sheets) s.draw(this.time);
     for (const v of this.vents) v.draw(this.time);
+    for (const h of this.hammers.values()) h.draw(this.time);
+    for (const c of this.crawlers) c.draw(alpha, this.time);
     for (const { brazier } of this.braziers) brazier.draw(this.time, frameDelta);
     for (const f of this.forges) f.draw(this.time, frameDelta);
     this.updraft?.draw(this.time, this.particles, this.sparkTexture, frameDelta);
@@ -771,6 +849,19 @@ export class Game {
     });
   }
 
+  /** Riassunto della partita, per la campagna e la schermata finale. */
+  get stats(): { deaths: number; perfect: number; gems: number; gemsTotal: number; time: number } {
+    return {
+      deaths: this.deaths, perfect: this.perfectRevives,
+      gems: this.pickups.collected, gemsTotal: this.pickups.total, time: this.time,
+    };
+  }
+
+  get clock(): number { return this.time; }
+
+  /** Schermata finale della campagna (la mostra main.ts dopo l'ultimo livello). */
+  showVictory(text: string): void { this.hud.showVictory(text); }
+
   /** Solo in sviluppo: comandi rapidi dalla console del browser. */
   devHandle() {
     return {
@@ -790,6 +881,8 @@ export class Game {
       embers: this.embers,
       physics: this.physics,
       crates: this.crates.map((c) => c.crate),
+      hammers: this.hammers,
+      crawlers: this.crawlers,
       split: this.split,
       map: this.map,
     };

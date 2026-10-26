@@ -89,20 +89,24 @@ abstract class Body implements SolidBody {
  * CASSA — l'oggetto generico. Pesa, si spinge, conta sulle piastre.
  * ------------------------------------------------------------------ */
 export class Crate extends Body implements Pushable {
+  /** Due pixel meno di un tile: spinta sopra una fossa di un tile, ci cade dentro. */
   readonly w = 16;
   readonly h = 16;
   readonly solidKind = 'full' as const;
   /** Una cassa pesa un po' più di un terzo della massa totale. */
   static readonly MASS = 0.35;
-  readonly mass = Crate.MASS;
+  /** Il lingotto di ghisa: da solo basta a una piastra, ma lo sposta solo chi è pesante. */
+  static readonly INGOT = 0.6;
   /** Peso minimo di chi spinge, per ogni cassa della fila. */
-  readonly minPusherMass = 0.3;
+  readonly minPusherMass: number;
   lastChain = 1;
   private physics: Physics | null = null;
-  private readonly art = new CassaView();
+  private readonly art: CassaView;
 
-  constructor() {
+  constructor(readonly mass = Crate.MASS) {
     super();
+    this.minPusherMass = mass >= Crate.INGOT ? Crate.INGOT : 0.3;
+    this.art = new CassaView(String(Math.round(mass * 100)));
     this.view.addChild(this.art.container);
   }
 

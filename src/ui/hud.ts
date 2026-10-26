@@ -259,8 +259,24 @@ export class Hud {
     t.position.set(i === 0 ? 16 : this.width - t.width - 16, this.height - 44);
   }
 
+  private victory = false;
+
+  /** Schermata di vittoria: resta finché non si ricomincia. */
+  showVictory(text: string): void {
+    this.victory = true;
+    this.lossText.text = text;
+    this.lossText.style.fontSize = 20;
+    this.lossText.style.align = 'center';
+    this.lossText.style.lineHeight = 34;
+    this.lossLayer.visible = true;
+    this.lossBg.alpha = 0.85;
+    this.lossText.alpha = 1;
+    this.lossText.scale.set(1);
+  }
+
   /** 0 = invisibile, 1 = schermo coperto. */
   setLoss(alpha: number): void {
+    if (this.victory) return;
     this.lossLayer.visible = alpha > 0.01;
     this.lossBg.alpha = Math.min(1, alpha) * 0.85;
     this.lossText.alpha = Math.min(1, alpha * 1.5);

@@ -2,7 +2,7 @@ import { Application } from 'pixi.js';
 import { Loop } from './core/loop';
 import { loadAssets } from './render/assets';
 import { Game } from './game/game';
-import { LEVELS } from './game/levels';
+import { CAMPAIGN_LENGTH, LEVELS } from './game/levels';
 
 /** Risoluzione interna fissa: l'inquadratura è identica su ogni schermo. */
 const VIEW_W = 1280;
@@ -49,6 +49,50 @@ async function boot(): Promise<void> {
   };
   window.addEventListener('keydown', onLevelKey);
 
+  /* --- campagna: i primi CAMPAIGN_LENGTH livelli, uno dopo l'altro --------- */
+  type Totals = { deaths: number; perfect: number; gems: number; gemsTotal: number; time: number };
+  const KEY = 'tandem.campaign';
+  const readTotals = (): Totals => {
+    try {
+      const raw = sessionStorage.getItem(KEY);
+      if (raw) return JSON.parse(raw) as Totals;
+    } catch { /* storage non disponibile: si riparte da zero */ }
+    return { deaths: 0, perfect: 0, gems: 0, gemsTotal: 0, time: 0 };
+  };
+  const writeTotals = (t: Totals | null): void => {
+    try { if (t) sessionStorage.setItem(KEY, JSON.stringify(t)); else sessionStorage.removeItem(KEY); } catch { /* idem */ }
+  };
+  if (levelIndex === 0) writeTotals(null);
+  let campaignDone = false;
+  const onVictoryKey = (e: KeyboardEvent): void => {
+    if (campaignDone && e.code === 'Enter') { params.set('level', '0'); location.search = params.toString(); }
+  };
+  window.addEventListener('keydown', onVictoryKey);
+  const checkCampaign = (): void => {
+    if (campaignDone || levelIndex >= CAMPAIGN_LENGTH || game.finishedAt < 0) return;
+    if (game.clock - game.finishedAt < 3) return;
+    campaignDone = true;
+    const s = game.stats;
+    const t = readTotals();
+    const total: Totals = {
+      deaths: t.deaths + s.deaths, perfect: t.perfect + s.perfect,
+      gems: t.gems + s.gems, gemsTotal: t.gemsTotal + s.gemsTotal, time: t.time + s.time,
+    };
+    if (levelIndex < CAMPAIGN_LENGTH - 1) {
+      writeTotals(total);
+      params.set('level', String(levelIndex + 1));
+      location.search = params.toString();
+      return;
+    }
+    writeTotals(null);
+    const min = Math.floor(total.time / 60), sec = Math.floor(total.time % 60);
+    game.showVictory(
+      `LA FONDERIA È VOSTRA\n` +
+      `TEMPO ${min}:${String(sec).padStart(2, '0')}   ·   GEMME ${total.gems}/${total.gemsTotal}\n` +
+      `CADUTE ${total.deaths}   ·   RINASCITE PERFETTE ${total.perfect}\n\nINVIO PER RICOMINCIARE`,
+    );
+  };
+
   const fit = (): void => {
     const scale = Math.min(window.innerWidth / VIEW_W, window.innerHeight / VIEW_H);
     app.canvas.style.width = `${Math.floor(VIEW_W * scale)}px`;
@@ -62,12 +106,18 @@ async function boot(): Promise<void> {
     (window as unknown as Record<string, unknown>)['__tandem'] = game.devHandle();
   }
 
+  if (import.meta.env.DEV) {
+    // per le prove a pannello nascosto, quando requestAnimationFrame è fermo
+    (window as unknown as Record<string, unknown>)['__campaignCheck'] = checkCampaign;
+  }
+
   const loop = new Loop(
     1 / 120,
     (dt) => game.fixedUpdate(dt),
     (alpha, frameDelta) => {
       game.render(alpha, frameDelta, loop.fps);
       game.present(app.renderer);
+      checkCampaign();
     },
   );
   loop.start();
@@ -81,6 +131,7 @@ async function boot(): Promise<void> {
       game.destroy();
       window.removeEventListener('resize', fit);
       window.removeEventListener('keydown', onLevelKey);
+      window.removeEventListener('keydown', onVictoryKey);
       app.destroy(true, { children: true, texture: true });
       mount.replaceChildren();
     });

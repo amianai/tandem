@@ -38,7 +38,8 @@ GHISA è pesante, più la brace è grossa (scoppio più ampio) ma vola meno.
 si accendono una dopo l'altra e scoppiano. Con `↓` soffia verso il basso
 (anche in aria). In aria, se è leggero, `-` resta lo Scatto: attraversare una
 brace la accende e allunga lo Scatto. Leggero = getto lungo e stretto,
-pesante = corto e largo. Il soffio spinge anche il compagno leggero e le casse.
+pesante = corto, largo e più forte. Il soffio spinge le casse, gli Scoriatori e
+il compagno **se è in aria** (chi plana può essere soffiato oltre un baratro).
 
 **Lo scoppio** non ferisce mai: spinge, tanto più forte quanto più sei
 leggero, sempre almeno per metà verso l'alto. Accende le braci vicine (micce),
@@ -48,7 +49,8 @@ Schianto di GHISA accende le braci a terra lì intorno.
 
 ## Il fattore morte
 
-- Si muore nella **scoria** e nel **vuoto**. La **lamiera** cede sotto chi è
+- Si muore nella **scoria**, nel **vuoto**, sotto un **maglio** e toccando uno
+  **Scoriatore**. La **lamiera** cede sotto chi è
   pesante, lo **sfiato** di vapore spinge via i leggeri (il pesante davanti fa
   da scudo): spesso si muore per una spinta finita male.
 - Chi muore diventa uno **spirito** (Tizzone per GHISA, Sbuffo per SOFFIO) e lo
@@ -61,6 +63,24 @@ Schianto di GHISA accende le braci a terra lì intorno.
   scoppio).
 - Bandiera e **forge** (checkpoint) vogliono tutti e due vivi. Se morite
   entrambi: "colata persa", si riparte dall'ultima forgia accesa.
+
+## La campagna
+
+Tre livelli brevi, uno dopo l'altro, senza suggerimenti a schermo: ognuno
+introduce una cosa nuova e la combina con le precedenti. Finito l'ultimo,
+schermata di vittoria con tempo, gemme, cadute e rinascite perfette.
+
+1. **Il Crogiolo** — il fuoco: loppa, fornelli, razzo (anche per GHISA),
+   Schianto che accende le braci.
+2. **Le Presse** — il **maglio**: pressa a ciclo che schiaccia; una piastra
+   collegata lo blocca in alto, e quello che schiaccia (braci comprese) scoppia.
+3. **La Colata** — lo **Scoriatore**: grumo di scoria che pattuglia e brucia
+   al contatto. Non si colpisce: il soffio (più forte se SOFFIO è pesante) o uno
+   scoppio lo spingono nella scoria. Lo Schianto vicino lo stordisce.
+
+Il **lingotto** è una cassa di ghisa da 0,6: da solo basta a una piastra, ma lo
+sposta solo chi è pesante. I personaggi salgono da soli i gradini di pochi
+pixel (bordi delle fosse, casse a filo del pavimento).
 
 **CASSE** — pesano 0,35. Per spingerle serve un peso di 0,3 per ogni cassa
 della fila: due casse a contatto si spingono insieme e chiedono 0,6, e se si
@@ -88,8 +108,8 @@ npm run build    # typecheck + bundle in dist/
 `Q` + `.` premuti **insieme** = inversione delle masse.
 Mentre uno dei due è morto, `Q` + `.` insieme fanno rinascere.
 
-Livelli: `Shift+N` passa al successivo, oppure `?level=0` (La Fornace) e
-`?level=1` (Sandbox 01) nell'URL. `Shift+R` riparte dall'ultima forgia.
+Livelli: `?level=0..2` campagna (Crogiolo, Presse, Colata), `?level=3` La
+Fornace (prova), `?level=4` Sandbox 01. `Shift+N` passa al successivo. `Shift+R` riparte dall'ultima forgia.
 
 `F1` pannello diagnostico · `Shift+R` respawn di entrambi.
 

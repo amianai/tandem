@@ -362,3 +362,112 @@ export class Forge {
     }
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * MAGLIO — pressa a ciclo fisso. Sale piano, trema un istante, cade di
+ * colpo: chi è sotto quando scende viene schiacciato. Una piastra
+ * collegata lo tiene bloccato in alto. Quello che schiaccia scoppia.
+ * ------------------------------------------------------------------ */
+export type HammerPhase = 'up' | 'warn' | 'down' | 'hold' | 'rise';
+
+export interface HammerTiming { up: number; warn: number; drop: number; hold: number; rise: number }
+
+export const HAMMER_SLOW: HammerTiming = { up: 1.1, warn: 0.3, drop: 0.12, hold: 0.45, rise: 0.9 };
+/** Ritmo serrato: sotto un maglio largo non si passa senza bloccarlo. */
+export const HAMMER_FAST: HammerTiming = { up: 0.45, warn: 0.25, drop: 0.1, hold: 0.35, rise: 0.55 };
+
+export class Hammer {
+  readonly container = new Container();
+  private readonly gfx = new Graphics();
+  readonly x: number;
+  readonly w: number;
+  private readonly headH: number;
+  /** Fondo della testa quando è in alto, e quando poggia a terra. */
+  private readonly upBottom: number;
+  private readonly floorY: number;
+  bottom: number;
+  phase: HammerPhase = 'up';
+  private t: number;
+  locked = false;
+
+  constructor(map: Tilemap, tiles: readonly T[], private readonly timing: HammerTiming, offset = 0) {
+    this.container.addChild(this.gfx);
+    const b = boundsOf(tiles);
+    this.x = b.x; this.w = b.w; this.headH = b.h;
+    this.upBottom = b.y + b.h;
+    // cade fino al primo pavimento sotto la testa
+    let ty = Math.floor(this.upBottom / TILE);
+    const tx = Math.floor((b.x + b.w / 2) / TILE);
+    while (ty < map.height && !map.isSolid(tx, ty)) ty++;
+    this.floorY = ty * TILE;
+    this.bottom = this.upBottom;
+    this.t = offset;
+  }
+
+  get headBox(): Rect { return { x: this.x, y: this.bottom - this.headH, w: this.w, h: this.headH }; }
+
+  /** Schiaccia: mentre scende o resta giù, chi tocca la testa muore. */
+  kills(box: Rect): boolean {
+    if (this.phase !== 'down' && this.phase !== 'hold') return false;
+    const inset: Rect = { x: this.x + 2, y: this.bottom - this.headH, w: this.w - 4, h: this.headH };
+    return rectsOverlap(box, inset);
+  }
+
+  /** Ritorna true nel passo in cui la testa tocca terra. */
+  update(dt: number, locked: boolean): boolean {
+    this.locked = locked;
+    const tm = this.timing;
+    let impact = false;
+    this.t += dt;
+    const advance = (dur: number, next: HammerPhase): void => {
+      if (this.t >= dur) { this.t -= dur; this.phase = next; }
+    };
+    switch (this.phase) {
+      case 'up':
+        // bloccato: resta su finché la piastra è premuta
+        if (locked) { this.t = 0; break; }
+        advance(tm.up, 'warn');
+        break;
+      case 'warn':
+        if (locked) { this.phase = 'up'; this.t = 0; break; }
+        advance(tm.warn, 'down');
+        break;
+      case 'down':
+        if (this.t >= tm.drop) { this.t -= tm.drop; this.phase = 'hold'; impact = true; }
+        break;
+      case 'hold':
+        advance(tm.hold, 'rise');
+        break;
+      case 'rise':
+        advance(tm.rise, 'up');
+        break;
+    }
+    const k = this.phase === 'down' ? Math.min(1, this.t / tm.drop)
+      : this.phase === 'hold' ? 1
+        : this.phase === 'rise' ? 1 - Math.min(1, this.t / tm.rise) : 0;
+    this.bottom = this.upBottom + (this.floorY - this.upBottom) * k * k;
+    return impact;
+  }
+
+  draw(time: number): void {
+    const g = this.gfx;
+    g.clear();
+    const shake = this.phase === 'warn' ? Math.sin(time * 80) * 1 : 0;
+    const x = this.x + shake, w = this.w;
+    const top = this.bottom - this.headH;
+    // stelo: dal soffitto (o 200 px sopra) fino alla testa
+    const rodTop = this.upBottom - this.headH - 220;
+    g.rect(x + w / 2 - 3, rodTop, 6, top - rodTop).fill({ color: PAL.slate2 }).stroke({ width: 1, color: PAL.night0 });
+    g.rect(x + w / 2 - 1, rodTop, 1, top - rodTop).fill({ color: PAL.steel1, alpha: 0.5 });
+    // testa
+    g.rect(x, top, w, this.headH).fill({ color: PAL.slate3 }).stroke({ width: 1, color: PAL.night0 });
+    g.rect(x, top, w, 2).fill({ color: PAL.fog, alpha: 0.5 });
+    // bordo inferiore a strisce di pericolo
+    for (let px = 0; px < w; px += 6) {
+      g.poly([x + px, this.bottom - 4, x + px + 3, this.bottom - 4, x + px + 6, this.bottom, x + px + 3, this.bottom])
+        .fill({ color: this.locked ? PAL.signal1 : PAL.brass2 });
+    }
+    if (this.locked) sceneLights.put(x + w / 2, this.bottom, 40, PAL.signal1, 0.5);
+    if (this.phase === 'warn') sceneLights.put(x + w / 2, this.bottom + 10, 50, PAL.alarm, 0.7);
+  }
+}

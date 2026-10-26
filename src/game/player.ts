@@ -437,6 +437,15 @@ export class Player {
           this.pushDrag = lerp(0.35, 0.75, this.mass) / Math.max(1, crate.lastChain * 0.75);
           continue;
         }
+        // Gradino di pochi pixel (bordo di una fossa, una cassa a filo del
+        // pavimento): da terra lo si sale senza saltare.
+        if (this.onGround) {
+          let stepped = false;
+          for (let k = 1; k <= 4; k++) {
+            if (!map.overlapsSolid({ ...box, y: box.y - k })) { this.y -= k; this.x = nextX; stepped = true; break; }
+          }
+          if (stepped) continue;
+        }
         this.vx = 0; this.extVx = 0; this.dashTimer = 0; return;
       }
       this.x = nextX;
