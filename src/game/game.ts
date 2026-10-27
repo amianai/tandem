@@ -5,6 +5,7 @@ import { CHARS, TILE, TILES, type Sheets } from '../render/assets';
 import { Background } from '../render/background';
 import { Follower, Shake } from '../render/camera';
 import { fxBus } from '../render/fx';
+import { sceneLights } from '../render/lighting';
 import { Particles } from '../render/particles';
 import { RenderPipeline } from '../render/pipeline';
 import { SplitScreen } from '../render/splitScreen';
@@ -36,6 +37,9 @@ const DEATH_HITSTOP = 0.08;
 const LOSS_FADE = 0.8;
 /** Spinta massima di uno scoppio, moltiplicata per (1 - massa). */
 const BLAST_SPEED = 640;
+/** Secondi di Fusione. */
+const FUSION_TIME = 7;
+const GOLD = 0xffc94a;
 
 type Point = { x: number; y: number };
 
@@ -95,6 +99,20 @@ export class Game {
   private lossOut = 0;
   private deaths = 0;
   private perfectRevives = 0;
+
+  /* --- Risonanza e Fusione ------------------------------------------ */
+  /** 0..1: si riempie con le azioni fatte insieme. */
+  private resonance = 0;
+  private resonanceAnnounced = false;
+  /** Secondi di Fusione rimasti (0 = spenta). */
+  private fusion = 0;
+  private fusions = 0;
+  /** Superfici della scoria su cui si cammina durante la Fusione. */
+  private readonly slagFloors: { box: Rect; solidKind: 'top' }[] = [];
+  private readonly fusionGfx = new Graphics();
+  /** Tempo sospeso: secondi rimasti e accumulatore dei passi saltati. */
+  private slowmo = 0;
+  private slowAcc = 0;
 
   /** Messaggio breve: ha la precedenza sui suggerimenti. */
   private flash: { text: string; until: number } | null = null;
@@ -161,6 +179,10 @@ export class Game {
     const tTiles = tilesOf('T');
     for (const run of horizontalRuns(tTiles)) this.sheets.push(new Sheet(this.map, run));
     for (const run of horizontalRuns(tilesOf('~'))) this.slag.push(new SlagPool(run, this.map.pixelHeight));
+    for (const s of this.slag) {
+      const z = s.killZone;
+      this.slagFloors.push({ box: { x: z.x - 2, y: z.y - 1, w: z.w + 4, h: 4 }, solidKind: 'top' });
+    }
     let ventIndex = 0;
     for (const [ch, dir] of [['<', -1], ['>', 1]] as const) {
       for (const t of tilesOf(ch)) {
@@ -245,6 +267,7 @@ export class Game {
       this.reserveGfx,
       this.spirits[0].view,
       this.spirits[1].view,
+      this.fusionGfx,
       this.particles.container,
     );
 
@@ -295,6 +318,12 @@ export class Game {
     // Hit-stop: alla morte il mondo si ferma un istante. L'orologio dei tasti
     // continua, così un tasto premuto in quel momento non va perso.
     if (this.hitstop > 0) { this.hitstop -= dt; return; }
+    if (this.slowmo > 0) {
+      this.slowmo -= dt;
+      this.slowAcc += 0.4;
+      if (this.slowAcc < 1) return;
+      this.slowAcc -= 1;
+    }
     this.time += dt;
 
     if (this.loss >= 0) {
@@ -307,17 +336,28 @@ export class Game {
 
     // 1. la Bilancia: ferma finché uno dei due è morto. Intanto l'accordo
     //    serve a rinascere.
-    if (this.bothAlive) {
+    if (this.fusion > 0) {
+      this.fusion = Math.max(0, this.fusion - dt);
+      if (this.fusion === 0) this.endFusion();
+    } else if (this.bothAlive && this.resonance >= 1 && this.chord.inSync) {
+      // Risonanza piena: l'accordo non inverte le masse, scatena la Fusione.
+      this.chord.consume();
+      this.startFusion();
+    } else if (this.bothAlive) {
       if (this.mass.update(dt, this.inputs[0], this.inputs[1], this.chord)) {
         this.shake.add(0.3);
         for (const p of this.players) this.burst(p.x, p.y - 8, p.tint, 18);
+        this.addResonance(0.03);
       }
     } else {
       this.mass.invertFlash = Math.max(0, this.mass.invertFlash - dt * 2.4);
       this.tryChordRevive();
     }
-    this.players[0].mass = this.mass.m1;
-    this.players[1].mass = this.mass.m2;
+    // In Fusione si salta da leggeri (e sulle piastre si pesa da pesanti, vedi sotto).
+    const fused = this.fusion > 0;
+    this.players[0].mass = fused ? 0.2 : this.mass.m1;
+    this.players[1].mass = fused ? 0.2 : this.mass.m2;
+    for (const p of this.players) p.fused = fused;
     for (const i of [0, 1] as const) this.invuln[i] = Math.max(0, this.invuln[i] - dt);
 
     const living = this.players.filter((p) => this.alive[p.id]);
@@ -415,9 +455,7 @@ export class Game {
       c.update(dt, this.map);
       if (this.slag.some((s) => s.kills(c.box)) || c.y > this.map.pixelHeight + 32
           || [...this.hammers.values()].some((h) => h.kills(c.box))) {
-        c.alive = false;
-        fxBus.emit({ type: 'sparks', x: c.x, y: c.y - 4, color: PAL.ember3, count: 14, up: true });
-        fxBus.emit({ type: 'flash', x: c.x, y: c.y - 4, color: PAL.ember2, radius: 50, intensity: 1, life: 0.3 });
+        this.meltCrawler(c);
       }
     }
 
@@ -432,6 +470,13 @@ export class Game {
     for (const p of living) {
       if (!this.alive[p.id] || this.invuln[p.id] > 0) continue;
       const box = p.hitbox;
+      if (fused) {
+        for (const c of this.crawlers) {
+          if (c.alive && rectsOverlap(c.box, box)) this.meltCrawler(c);
+        }
+        if (p.y > this.map.pixelHeight + 32) this.kill(p.id, 'void');
+        continue;
+      }
       if (this.slag.some((s) => s.kills(box))) this.kill(p.id, 'slag');
       else if (p.y > this.map.pixelHeight + 32) this.kill(p.id, 'void');
       else if ([...this.hammers.values()].some((h) => h.kills(box))) this.kill(p.id, 'crush');
@@ -450,7 +495,7 @@ export class Game {
 
     // 7. piastre, fornelli e cancelli
     const weights: Weight[] = [
-      ...living.map((p) => ({ box: p.hitbox, mass: p.mass })),
+      ...living.map((p) => ({ box: p.hitbox, mass: fused ? MassSystem.HEAVY : p.mass })),
       ...this.crates.map(({ crate }) => ({ box: crate.box, mass: crate.mass })),
     ];
     let needsMass = false;
@@ -483,6 +528,7 @@ export class Game {
     // 9. raccolta e traguardo (servono due corpi vivi)
     const boxes: Rect[] = living.map((p) => p.hitbox);
     if (this.pickups.update(dt, boxes, this.particles, this.sparkTexture) > 0) {
+      this.addResonance(0.12);
       this.hud.setGems(this.pickups.collected, this.pickups.total);
       this.shake.add(0.05);
     }
@@ -504,12 +550,14 @@ export class Game {
       switch (e.type) {
         case 'gadget':
           if (p.role === 'ghisa') {
+            if (this.fusion > 0) this.embers.refill();
             if (!this.embers.throw(p.x, p.y, p.facingDir, p.mass, e.aim, p.onGround, p.vx)) {
               this.burst(p.x - p.facingDir * 6, p.y - 14, PAL.steel0, 4);
             }
           } else {
             const cone = this.embers.blow(p.x, p.y, p.facingDir, p.mass, e.aim);
             if (cone) this.applyBlow(p, cone);
+            if (this.fusion > 0) this.embers.blowCooldown = Math.min(this.embers.blowCooldown, 0.12);
           }
           break;
         case 'denied':
@@ -560,6 +608,7 @@ export class Game {
   /** Uno scoppio: spinge, accende le micce, abbatte la loppa, accende i fornelli. */
   private explode(ex: Explosion): void {
     const big = ex.size === 'big' ? 1 : ex.size === 'mid' ? 0.7 : 0.45;
+    this.addResonance(0.04);
     fxBus.emit({ type: 'flash', x: ex.x, y: ex.y, color: PAL.ember3, radius: ex.radius * 2.4, intensity: 1.7, life: 0.3 });
     fxBus.emit({ type: 'ring', x: ex.x, y: ex.y, color: PAL.ember2, radius: ex.radius, life: 0.35 });
     fxBus.emit({ type: 'sparks', x: ex.x, y: ex.y, color: PAL.ember3, count: 12 + Math.round(big * 10) });
@@ -585,6 +634,12 @@ export class Game {
       const up = Math.max(-ny, 0.5);
       const speed = BLAST_SPEED * (1 - p.mass);
       p.blast(nx * speed * 0.85, -up * speed);
+      if (up * speed > 420) {
+        // un razzo riuscito: il mondo trattiene il fiato per un istante
+        this.slowmo = 0.35;
+        this.addResonance(0.22);
+        fxBus.emit({ type: 'ring', x: p.x, y: p.y, color: GOLD, radius: 34, flat: true, life: 0.4 });
+      }
     }
 
     // le micce arrivano un po' più in là dello scoppio stesso
@@ -610,6 +665,7 @@ export class Game {
     }
     for (const { brazier } of this.braziers) {
       if (brazier.tryLight(ex.x, ex.y, ex.radius)) {
+        this.addResonance(0.12);
         fxBus.emit({ type: 'flash', x: brazier.x, y: brazier.y - 14, color: PAL.ember2, radius: 60, intensity: 1.2, life: 0.4 });
         const left = this.braziers.filter((b) => !b.brazier.lit).length;
         this.say(left > 0 ? `FORNELLO ACCESO: NE MANCANO ${left}` : 'FORNELLI ACCESI: IL CANCELLO SI APRE');
@@ -694,6 +750,7 @@ export class Game {
     fxBus.emit({ type: 'ring', x: at.x, y: at.y - 8, color, radius: perfect ? 46 : 26, life: 0.4 });
     this.burst(at.x, at.y - 8, color, perfect ? 36 : 18);
 
+    this.addResonance(perfect ? 0.3 : 0.1);
     if (perfect) {
       this.perfectRevives++;
       this.embers.refill();
@@ -710,7 +767,80 @@ export class Game {
     }
   }
 
+  /* --- Risonanza e Fusione ------------------------------------------ */
+
+  private addResonance(amount: number): void {
+    if (this.fusion > 0) return;
+    this.resonance = Math.min(1, this.resonance + amount);
+    if (this.resonance >= 1 && !this.resonanceAnnounced) {
+      this.resonanceAnnounced = true;
+      this.say('RISONANZA PIENA: Q + . INSIEME PER LA FUSIONE', 2.4);
+      for (const p of this.players) if (this.alive[p.id]) this.burst(p.x, p.y - 10, GOLD, 16);
+    }
+  }
+
+  private startFusion(): void {
+    this.fusion = FUSION_TIME;
+    this.resonance = 0;
+    this.resonanceAnnounced = false;
+    this.fusions++;
+    for (const f of this.slagFloors) this.physics.add(f);
+    this.embers.refill();
+    this.shake.add(0.6);
+    this.slowmo = 0.5;
+    for (const p of this.players) {
+      fxBus.emit({ type: 'flash', x: p.x, y: p.y - 8, color: GOLD, radius: 140, intensity: 2, life: 0.6 });
+      fxBus.emit({ type: 'ring', x: p.x, y: p.y - 8, color: GOLD, radius: 70, life: 0.6 });
+      fxBus.emit({ type: 'shock', x: p.x, y: p.y - 8, strength: 1, owner: p.id });
+      this.burst(p.x, p.y - 8, GOLD, 40);
+    }
+    this.say('FUSIONE!  SCORIA, MAGLI E SCORIATORI NON VI FERMANO', 2.2);
+  }
+
+  private endFusion(): void {
+    for (const f of this.slagFloors) this.physics.remove(f);
+    // un istante di grazia per uscire dalla scoria
+    for (const i of [0, 1] as const) this.invuln[i] = Math.max(this.invuln[i], 0.8);
+    for (const p of this.players) p.fused = false;
+    this.say('LA FUSIONE SI RAFFREDDA', 1.4);
+  }
+
+  private meltCrawler(c: Crawler): void {
+    if (!c.alive) return;
+    c.alive = false;
+    fxBus.emit({ type: 'sparks', x: c.x, y: c.y - 4, color: PAL.ember3, count: 14, up: true });
+    fxBus.emit({ type: 'flash', x: c.x, y: c.y - 4, color: PAL.ember2, radius: 50, intensity: 1, life: 0.3 });
+    this.addResonance(0.2);
+  }
+
+  private drawFusion(time: number): void {
+    const g = this.fusionGfx;
+    g.clear();
+    if (this.fusion <= 0) return;
+    const fade = Math.min(1, this.fusion / 1.2);
+    const blink = this.fusion < 1.6 ? 0.4 + 0.6 * Math.abs(Math.sin(time * 14)) : 1;
+    // la scoria diventa un pavimento d'oro
+    for (const f of this.slagFloors) {
+      g.rect(f.box.x, f.box.y, f.box.w, 2).fill({ color: 0xfff1b8, alpha: 0.7 * blink });
+    }
+    for (const p of this.players) {
+      if (!this.alive[p.id]) continue;
+      const x = p.view.x, y = p.view.y - 9;
+      const r = 13 + Math.sin(time * 10 + p.id * 2) * 2;
+      g.circle(x, y, r).stroke({ width: 2, color: GOLD, alpha: 0.75 * fade * blink });
+      g.circle(x, y, r + 5).stroke({ width: 1, color: 0xfff1b8, alpha: 0.35 * fade * blink });
+      sceneLights.put(x, y, 100, GOLD, 1.3 * fade);
+      if (Math.random() < 0.6) {
+        this.particles.emit({
+          texture: this.sparkTexture, x: x + (Math.random() - 0.5) * 10, y: y + 6, count: 1,
+          speed: [10, 40], life: [0.3, 0.6], scale: [0.06, 0.12], tint: GOLD, additive: true, gravity: -40,
+        });
+      }
+    }
+  }
+
   private restartFromCheckpoint(): void {
+    if (this.fusion > 0) { this.fusion = 0; this.endFusion(); }
     this.loss = -1;
     this.lossOut = 0.5;
     for (const i of [0, 1] as const) {
@@ -803,6 +933,8 @@ export class Game {
     if (this.alive[0]) this.embers.drawReserve(this.reserveGfx, g.view.x, g.view.y, g.facingDir, this.time);
     const ready = this.reviveReady();
     this.spirits.forEach((s) => s.draw(alpha, this.time, ready));
+    this.drawFusion(this.time);
+    this.hud.setResonance(frameDelta, this.resonance, this.fusion, this.time);
 
     this.hud.setMass(
       frameDelta, this.mass.m1, this.mass.ballast, this.mass.m2,
@@ -850,8 +982,9 @@ export class Game {
   }
 
   /** Riassunto della partita, per la campagna e la schermata finale. */
-  get stats(): { deaths: number; perfect: number; gems: number; gemsTotal: number; time: number } {
+  get stats(): { deaths: number; perfect: number; gems: number; gemsTotal: number; time: number; fusions: number } {
     return {
+      fusions: this.fusions,
       deaths: this.deaths, perfect: this.perfectRevives,
       gems: this.pickups.collected, gemsTotal: this.pickups.total, time: this.time,
     };
@@ -874,6 +1007,8 @@ export class Game {
         this.mass.m2 = pool - this.mass.m1;
       },
       kill: (who: 0 | 1): void => this.kill(who, 'slag'),
+      /** Riempie la Risonanza (0..1). */
+      resonance: (v = 1): void => { this.resonance = v; },
       alive: this.alive,
       spirits: this.spirits,
       players: this.players,

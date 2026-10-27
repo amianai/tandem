@@ -64,6 +64,24 @@ Schianto di GHISA accende le braci a terra lì intorno.
 - Bandiera e **forge** (checkpoint) vogliono tutti e due vivi. Se morite
   entrambi: "colata persa", si riparte dall'ultima forgia accesa.
 
+## Risonanza e Fusione
+
+Sotto la Bilancia c'è una barra d'oro, la **Risonanza**: si riempie con quello
+che fate insieme. Razzi (+22%), scoppi, fornelli accesi, Scoriatori sciolti,
+gemme, inversioni e soprattutto rinascite (perfette +30%). Ogni razzo
+riuscito fa anche trattenere il fiato al mondo: un istante di tempo sospeso.
+
+Quando la Risonanza è piena, l'accordo `Q` + `.` non inverte le masse: scatena
+la **Fusione**. Per 7 secondi siete ghisa incandescente:
+
+- si cammina sulla scoria (allo spegnimento c'è un attimo per scendere);
+- gli Scoriatori toccati si sciolgono, i magli non schiacciano;
+- si salta da leggeri ma sulle piastre si pesa da pesanti;
+- Schianto e Scatto sempre disponibili, braci infinite, soffio senza attesa.
+
+La Fusione è una scorciatoia che si guadagna giocando bene in due: spenderla
+nel punto giusto di un livello è una scelta.
+
 ## La campagna
 
 Tre livelli brevi, uno dopo l'altro, senza suggerimenti a schermo: ognuno

@@ -177,7 +177,10 @@ export class Hud {
     this.lossLayer.addChild(this.lossBg, this.lossText);
     this.lossLayer.visible = false;
 
+    this.resText = new Text({ text: 'RISONANZA', style: style(7, 0xa08a52) });
+
     this.buildLegend(players);
+    this.container.addChild(this.resGfx, this.resText);
     this.container.addChild(
       this.frame, this.levelText, this.gemText, this.legend, this.massBar.container, this.promptBox,
       ...this.status, this.lossLayer,
@@ -240,7 +243,7 @@ export class Hud {
       this.promptText.position.set(14, (h - this.promptText.height) / 2);
       // In alto, sotto la barra della massa: in basso coprirebbe i personaggi,
       // che in un platform stanno quasi sempre nella metà inferiore.
-      this.promptBox.position.set((this.width - w) / 2, 66);
+      this.promptBox.position.set((this.width - w) / 2, 80);
     }
     this.promptTarget = 1;
   }
@@ -260,6 +263,36 @@ export class Hud {
   }
 
   private victory = false;
+  private readonly resGfx = new Graphics();
+  private readonly resText: Text;
+  private shownRes = 0;
+
+  /**
+   * La Risonanza: una sottile barra d'oro sotto la Bilancia. Piena = la
+   * Fusione è pronta; durante la Fusione diventa il conto alla rovescia.
+   */
+  setResonance(dt: number, value: number, fusionLeft: number, time: number): void {
+    this.shownRes = damp(this.shownRes, value, 10, dt);
+    const W = 330, x = this.width / 2 - W / 2, y = 60;
+    const g = this.resGfx.clear();
+    g.roundRect(x - 2, y - 2, W + 4, 8, 3).fill({ color: 0x0b0d16, alpha: 0.72 });
+    const gold = 0xffc94a;
+    if (fusionLeft > 0) {
+      const k = fusionLeft / 7;
+      const blink = fusionLeft < 1.6 ? 0.45 + 0.55 * Math.abs(Math.sin(time * 14)) : 1;
+      g.rect(x, y, W * k, 4).fill({ color: 0xfff1b8, alpha: blink });
+      this.resText.text = `FUSIONE  ${fusionLeft.toFixed(1)}`;
+      this.resText.style.fill = 0xfff1b8;
+    } else {
+      const full = value >= 1;
+      const pulse = full ? 0.6 + 0.4 * Math.sin(time * 8) : 1;
+      g.rect(x, y, W * this.shownRes, 4).fill({ color: gold, alpha: pulse });
+      for (let i = 1; i < 4; i++) g.rect(x + (W * i) / 4, y, 1, 4).fill({ color: 0x0b0d16, alpha: 0.6 });
+      this.resText.text = full ? 'RISONANZA PIENA  ·  Q + . INSIEME: FUSIONE' : 'RISONANZA';
+      this.resText.style.fill = full ? 0xfff1b8 : 0xa08a52;
+    }
+    this.resText.position.set(this.width / 2 - this.resText.width / 2, y + 7);
+  }
 
   /** Schermata di vittoria: resta finché non si ricomincia. */
   showVictory(text: string): void {

@@ -50,14 +50,14 @@ async function boot(): Promise<void> {
   window.addEventListener('keydown', onLevelKey);
 
   /* --- campagna: i primi CAMPAIGN_LENGTH livelli, uno dopo l'altro --------- */
-  type Totals = { deaths: number; perfect: number; gems: number; gemsTotal: number; time: number };
+  type Totals = { deaths: number; perfect: number; gems: number; gemsTotal: number; time: number; fusions: number };
   const KEY = 'tandem.campaign';
   const readTotals = (): Totals => {
     try {
       const raw = sessionStorage.getItem(KEY);
       if (raw) return JSON.parse(raw) as Totals;
     } catch { /* storage non disponibile: si riparte da zero */ }
-    return { deaths: 0, perfect: 0, gems: 0, gemsTotal: 0, time: 0 };
+    return { deaths: 0, perfect: 0, gems: 0, gemsTotal: 0, time: 0, fusions: 0 };
   };
   const writeTotals = (t: Totals | null): void => {
     try { if (t) sessionStorage.setItem(KEY, JSON.stringify(t)); else sessionStorage.removeItem(KEY); } catch { /* idem */ }
@@ -77,6 +77,7 @@ async function boot(): Promise<void> {
     const total: Totals = {
       deaths: t.deaths + s.deaths, perfect: t.perfect + s.perfect,
       gems: t.gems + s.gems, gemsTotal: t.gemsTotal + s.gemsTotal, time: t.time + s.time,
+      fusions: (t.fusions ?? 0) + s.fusions,
     };
     if (levelIndex < CAMPAIGN_LENGTH - 1) {
       writeTotals(total);
@@ -89,7 +90,7 @@ async function boot(): Promise<void> {
     game.showVictory(
       `LA FONDERIA È VOSTRA\n` +
       `TEMPO ${min}:${String(sec).padStart(2, '0')}   ·   GEMME ${total.gems}/${total.gemsTotal}\n` +
-      `CADUTE ${total.deaths}   ·   RINASCITE PERFETTE ${total.perfect}\n\nINVIO PER RICOMINCIARE`,
+      `CADUTE ${total.deaths}   ·   RINASCITE PERFETTE ${total.perfect}   ·   FUSIONI ${total.fusions}\n\nINVIO PER RICOMINCIARE`,
     );
   };
 

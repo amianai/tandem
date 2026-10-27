@@ -110,6 +110,8 @@ export class Player {
   readonly events: PlayerEvent[] = [];
   /** Falso mentre il giocatore è uno spirito (lo imposta il gioco). */
   alive = true;
+  /** Vero durante la Fusione (lo imposta il gioco). */
+  fused = false;
 
   readonly view = new Container();
   /** Il personaggio disegnato (rig procedurale, vedi render/art/characters.ts). */
@@ -136,8 +138,9 @@ export class Player {
 
   get focusX(): number { return this.x; }
   get focusY(): number { return this.y - HITBOX_H * 0.5; }
-  get isHeavy(): boolean { return this.mass >= MassSystem.HEAVY; }
-  get isLight(): boolean { return this.mass <= MassSystem.LIGHT; }
+  /** Durante la Fusione il personaggio è pesante e leggero insieme: tutto è sbloccato. */
+  get isHeavy(): boolean { return this.fused || this.mass >= MassSystem.HEAVY; }
+  get isLight(): boolean { return this.fused || this.mass <= MassSystem.LIGHT; }
   get isDashing(): boolean { return this.dashTimer > 0; }
   get isSlamming(): boolean { return this.slamming; }
   get isGliding(): boolean { return this.gliding; }
