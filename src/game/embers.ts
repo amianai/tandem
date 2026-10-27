@@ -36,6 +36,8 @@ export interface Ember {
   fuse: number;
   age: number;
   seed: number;
+  /** Colpo di cannone della Fusione: vola dritto e scoppia all'impatto. */
+  missile: boolean;
 }
 
 export interface Explosion { x: number; y: number; radius: number; size: EmberSize }
@@ -114,7 +116,7 @@ export class EmberSystem {
     const spec = emberSpec(mass);
     const e: Ember = {
       x: x + facing * 5, y: y - 12, vx: 0, vy: 0, stuck: false, crate: null, ox: 0, oy: 0,
-      size: spec.size, radius: spec.radius, fuse: -1, age: 0, seed: Math.random() * 10,
+      size: spec.size, radius: spec.radius, fuse: -1, age: 0, seed: Math.random() * 10, missile: false,
     };
     if (aim === 'down' && onGround) {
       // ai piedi: resta sul pavimento, un passo avanti
@@ -132,6 +134,32 @@ export class EmberSystem {
     }
     this.embers.push(e);
     return true;
+  }
+
+  /**
+   * Cannone della Fusione: GHISA spara, SOFFIO ha mirato. La brace parte
+   * dritta e veloce, cala appena, e scoppia contro la prima cosa che tocca.
+   */
+  fire(x: number, y: number, dx: number, dy: number): boolean {
+    if (this.reserve <= 0) return false;
+    this.reserve--;
+    if (this.embers.length >= EmberSystem.RESERVE) {
+      const old = this.embers.shift()!;
+      this.fizzles.push({ x: old.x, y: old.y, age: 0 });
+    }
+    const speed = 460;
+    this.embers.push({
+      x: x + dx * 10, y: y + dy * 10, vx: dx * speed, vy: dy * speed, stuck: false, crate: null,
+      ox: 0, oy: 0, size: 'big', radius: 3 * 18, fuse: -1, age: 0, seed: Math.random() * 10, missile: true,
+    });
+    return true;
+  }
+
+  /** Fa scoppiare subito i colpi di cannone entro `r` da (x, y). */
+  detonateMissilesNear(x: number, y: number, r: number): void {
+    for (const e of this.embers) {
+      if (e.missile && e.fuse < 0 && Math.hypot(e.x - x, e.y - y) <= r) e.fuse = 0.001;
+    }
   }
 
   /* --- SOFFIO --------------------------------------------------------- */
@@ -234,7 +262,7 @@ export class EmberSystem {
 
   /** Volo a passi brevi: la brace si ferma sulla prima superficie che tocca. */
   private fly(e: Ember, dt: number, physics: Physics, crates: readonly Crate[]): void {
-    e.vy = Math.min(e.vy + GRAVITY * dt, 700);
+    e.vy = Math.min(e.vy + (e.missile ? 220 : GRAVITY) * dt, 700);
     const steps = Math.max(1, Math.ceil(Math.hypot(e.vx, e.vy) * dt / 2));
     for (let s = 0; s < steps; s++) {
       const nx = e.x + (e.vx * dt) / steps;
@@ -246,10 +274,12 @@ export class EmberSystem {
       });
       if (crate) {
         e.stuck = true; e.crate = crate; e.ox = e.x - crate.x; e.oy = e.y - crate.y;
+        if (e.missile) e.fuse = 0.001;
         return;
       }
       if (physics.map.overlapsSolid(box)) {
         e.stuck = true;
+        if (e.missile) e.fuse = 0.001;
         return;
       }
       e.x = nx; e.y = ny;

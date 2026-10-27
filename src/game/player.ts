@@ -112,6 +112,8 @@ export class Player {
   alive = true;
   /** Vero durante la Fusione (lo imposta il gioco). */
   fused = false;
+  /** Vela: chi è fuso con lui la tiene aperta e la caduta rallenta (lo imposta il gioco). */
+  hover = false;
 
   readonly view = new Container();
   /** Il personaggio disegnato (rig procedurale, vedi render/art/characters.ts). */
@@ -184,6 +186,17 @@ export class Player {
     this.onGround = false;
     this.coyote = 0;
     this.squash = 1.38;
+  }
+
+  /** Getto di vapore della Fusione: imposta di colpo la velocità nella direzione voluta. */
+  jet(vx: number, vy: number): void {
+    this.extVx = vx;
+    this.vy = vy;
+    this.jumping = false;
+    this.slamming = false;
+    this.onGround = false;
+    this.coyote = 0;
+    this.squash = 1.3;
   }
 
   /** Spinta continua (getto di vapore), in px/s². */
@@ -306,6 +319,9 @@ export class Player {
         }
       }
     }
+
+    // vela aperta: la caduta non supera una velocità bassa
+    if (this.hover && this.vy > 45 && !this.slamming) this.vy = 45;
 
     /* --- collisioni --------------------------------------------------- */
     this.pushDrag = 1;

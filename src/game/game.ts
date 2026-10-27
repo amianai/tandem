@@ -37,8 +37,14 @@ const DEATH_HITSTOP = 0.08;
 const LOSS_FADE = 0.8;
 /** Spinta massima di uno scoppio, moltiplicata per (1 - massa). */
 const BLAST_SPEED = 640;
-/** Secondi di Fusione. */
-const FUSION_TIME = 7;
+/** Secondi di Fusione: poi la lega si raffredda e i due si separano. */
+const FUSION_TIME = 12;
+/** Distanza massima per fondersi. */
+const FUSE_RANGE = 70;
+const JETS = 3;
+/** Il corpo fuso pesa tutta la massa: i getti devono vincerne la gravità. */
+const JET_UP = 560;
+const JET_SIDE = 420;
 const GOLD = 0xffc94a;
 
 type Point = { x: number; y: number };
@@ -104,11 +110,16 @@ export class Game {
   /** 0..1: si riempie con le azioni fatte insieme. */
   private resonance = 0;
   private resonanceAnnounced = false;
-  /** Secondi di Fusione rimasti (0 = spenta). */
+  /**
+   * Secondi di Fusione rimasti (0 = separati). Fusi, i due diventano TANDEM:
+   * GHISA guida il corpo e spara, SOFFIO mira, dà i getti e apre la vela.
+   */
   private fusion = 0;
   private fusions = 0;
-  /** Superfici della scoria su cui si cammina durante la Fusione. */
-  private readonly slagFloors: { box: Rect; solidKind: 'top' }[] = [];
+  private jets = JETS;
+  private jetRegen = 0;
+  /** Direzione del mirino di SOFFIO (versore). */
+  private aim: Point = { x: 1, y: 0 };
   private readonly fusionGfx = new Graphics();
   /** Tempo sospeso: secondi rimasti e accumulatore dei passi saltati. */
   private slowmo = 0;
@@ -179,10 +190,6 @@ export class Game {
     const tTiles = tilesOf('T');
     for (const run of horizontalRuns(tTiles)) this.sheets.push(new Sheet(this.map, run));
     for (const run of horizontalRuns(tilesOf('~'))) this.slag.push(new SlagPool(run, this.map.pixelHeight));
-    for (const s of this.slag) {
-      const z = s.killZone;
-      this.slagFloors.push({ box: { x: z.x - 2, y: z.y - 1, w: z.w + 4, h: 4 }, solidKind: 'top' });
-    }
     let ventIndex = 0;
     for (const [ch, dir] of [['<', -1], ['>', 1]] as const) {
       for (const t of tilesOf(ch)) {
@@ -338,11 +345,14 @@ export class Game {
     //    serve a rinascere.
     if (this.fusion > 0) {
       this.fusion = Math.max(0, this.fusion - dt);
-      if (this.fusion === 0) this.endFusion();
+      if (this.chord.inSync) { this.chord.consume(); this.unfuse('choice'); }
+      else if (this.fusion === 0) this.unfuse('time');
     } else if (this.bothAlive && this.resonance >= 1 && this.chord.inSync) {
-      // Risonanza piena: l'accordo non inverte le masse, scatena la Fusione.
+      // Risonanza piena: l'accordo non inverte le masse, vi fonde.
       this.chord.consume();
-      this.startFusion();
+      const [a, b] = this.players;
+      if (Math.hypot(a.x - b.x, a.y - b.y) <= FUSE_RANGE) this.startFusion();
+      else this.say('AVVICINATEVI PER FONDERVI', 1.4);
     } else if (this.bothAlive) {
       if (this.mass.update(dt, this.inputs[0], this.inputs[1], this.chord)) {
         this.shake.add(0.3);
@@ -353,14 +363,16 @@ export class Game {
       this.mass.invertFlash = Math.max(0, this.mass.invertFlash - dt * 2.4);
       this.tryChordRevive();
     }
-    // In Fusione si salta da leggeri (e sulle piastre si pesa da pesanti, vedi sotto).
+    // Fusi, il corpo è uno solo e pesa quanto tutti e due insieme.
     const fused = this.fusion > 0;
-    this.players[0].mass = fused ? 0.2 : this.mass.m1;
-    this.players[1].mass = fused ? 0.2 : this.mass.m2;
+    this.players[0].mass = fused ? 1 : this.mass.m1;
+    this.players[1].mass = this.mass.m2;
     for (const p of this.players) p.fused = fused;
     for (const i of [0, 1] as const) this.invuln[i] = Math.max(0, this.invuln[i] - dt);
 
-    const living = this.players.filter((p) => this.alive[p.id]);
+    // SOFFIO, fuso, non ha più un corpo: è dentro GHISA.
+    const living = this.players.filter((p) => this.alive[p.id] && !(fused && p.id === 1));
+    if (fused) this.driveFusion(dt);
 
     // 2. correnti e vapore agiscono prima del passo fisico
     let liftedTooHeavy = false;
@@ -436,6 +448,7 @@ export class Game {
       crate.update(dt, this.physics);
       if (crate.y > this.map.pixelHeight + 48) crate.placeAt(spawn.x, spawn.y);
     }
+    for (const c of this.crawlers) if (c.alive) this.embers.detonateMissilesNear(c.x, c.y - 5, 11);
     for (const ex of this.embers.update(dt, this.physics, this.crates.map((c) => c.crate))) {
       this.explode(ex);
     }
@@ -471,10 +484,12 @@ export class Game {
       if (!this.alive[p.id] || this.invuln[p.id] > 0) continue;
       const box = p.hitbox;
       if (fused) {
-        for (const c of this.crawlers) {
-          if (c.alive && rectsOverlap(c.box, box)) this.meltCrawler(c);
-        }
-        if (p.y > this.map.pixelHeight + 32) this.kill(p.id, 'void');
+        // la fusione fa da scudo: un colpo mortale la spezza invece di uccidere
+        const hit = this.slag.some((s) => s.kills(box))
+          || [...this.hammers.values()].some((h) => h.kills(box))
+          || this.crawlers.some((c) => c.alive && rectsOverlap(c.box, box));
+        if (hit) this.unfuse('hit');
+        else if (p.y > this.map.pixelHeight + 32) { this.unfuse('time'); this.kill(0, 'void'); this.kill(1, 'void'); }
         continue;
       }
       if (this.slag.some((s) => s.kills(box))) this.kill(p.id, 'slag');
@@ -495,7 +510,7 @@ export class Game {
 
     // 7. piastre, fornelli e cancelli
     const weights: Weight[] = [
-      ...living.map((p) => ({ box: p.hitbox, mass: fused ? MassSystem.HEAVY : p.mass })),
+      ...living.map((p) => ({ box: p.hitbox, mass: p.mass })),
       ...this.crates.map(({ crate }) => ({ box: crate.box, mass: crate.mass })),
     ];
     let needsMass = false;
@@ -549,15 +564,21 @@ export class Game {
     for (const e of p.events.splice(0)) {
       switch (e.type) {
         case 'gadget':
-          if (p.role === 'ghisa') {
-            if (this.fusion > 0) this.embers.refill();
+          if (p.role === 'ghisa' && this.fusion > 0) {
+            // cannone: spara GHISA, ha mirato SOFFIO
+            if (this.embers.fire(p.x, p.y - 10, this.aim.x, this.aim.y)) {
+              fxBus.emit({ type: 'flash', x: p.x + this.aim.x * 10, y: p.y - 10 + this.aim.y * 10, color: PAL.ember3, radius: 40, intensity: 1, life: 0.15 });
+              this.shake.add(0.08);
+            } else {
+              this.burst(p.x, p.y - 14, PAL.steel0, 4);
+            }
+          } else if (p.role === 'ghisa') {
             if (!this.embers.throw(p.x, p.y, p.facingDir, p.mass, e.aim, p.onGround, p.vx)) {
               this.burst(p.x - p.facingDir * 6, p.y - 14, PAL.steel0, 4);
             }
           } else {
             const cone = this.embers.blow(p.x, p.y, p.facingDir, p.mass, e.aim);
             if (cone) this.applyBlow(p, cone);
-            if (this.fusion > 0) this.embers.blowCooldown = Math.min(this.embers.blowCooldown, 0.12);
           }
           break;
         case 'denied':
@@ -780,29 +801,87 @@ export class Game {
   }
 
   private startFusion(): void {
+    const [g, so] = this.players;
     this.fusion = FUSION_TIME;
     this.resonance = 0;
     this.resonanceAnnounced = false;
     this.fusions++;
-    for (const f of this.slagFloors) this.physics.add(f);
-    this.embers.refill();
+    this.jets = JETS;
+    this.aim = { x: g.facingDir, y: 0 };
+    so.view.visible = false;
+    // SOFFIO vola dentro GHISA
+    fxBus.emit({ type: 'flash', x: (g.x + so.x) / 2, y: g.y - 8, color: GOLD, radius: 150, intensity: 2, life: 0.6 });
+    fxBus.emit({ type: 'ring', x: g.x, y: g.y - 8, color: GOLD, radius: 70, life: 0.6 });
+    fxBus.emit({ type: 'shock', x: g.x, y: g.y - 8, strength: 1, owner: 0 });
+    this.burst(so.x, so.y - 8, ROLE_COLORS.soffio.main, 30);
+    this.burst(g.x, g.y - 8, GOLD, 40);
     this.shake.add(0.6);
     this.slowmo = 0.5;
-    for (const p of this.players) {
-      fxBus.emit({ type: 'flash', x: p.x, y: p.y - 8, color: GOLD, radius: 140, intensity: 2, life: 0.6 });
-      fxBus.emit({ type: 'ring', x: p.x, y: p.y - 8, color: GOLD, radius: 70, life: 0.6 });
-      fxBus.emit({ type: 'shock', x: p.x, y: p.y - 8, strength: 1, owner: p.id });
-      this.burst(p.x, p.y - 8, GOLD, 40);
-    }
-    this.say('FUSIONE!  SCORIA, MAGLI E SCORIATORI NON VI FERMANO', 2.2);
+    this.say('TANDEM!  GHISA: MUOVE, SALTA, SPARA (E)\nSOFFIO: MIRA (FRECCE), GETTO (-), VELA (. TENUTO)', 3);
   }
 
-  private endFusion(): void {
-    for (const f of this.slagFloors) this.physics.remove(f);
-    // un istante di grazia per uscire dalla scoria
-    for (const i of [0, 1] as const) this.invuln[i] = Math.max(this.invuln[i], 0.8);
-    for (const p of this.players) p.fused = false;
-    this.say('LA FUSIONE SI RAFFREDDA', 1.4);
+  /** Ogni passo da fusi: mirino, getti e vela li comanda SOFFIO. */
+  private driveFusion(dt: number): void {
+    const g = this.players[0];
+    const so = this.players[1];
+    const si = this.inputs[1];
+    const ax = si.moveX;
+    const ay = (si.down ? 1 : 0) - (si.up ? 1 : 0);
+    if (ax !== 0 || ay !== 0) {
+      const l = Math.hypot(ax, ay);
+      this.aim = { x: ax / l, y: ay / l };
+    } else if (this.aim.y === 0) {
+      this.aim = { x: g.facingDir, y: 0 };
+    }
+    g.hover = si.aHeld;
+
+    if (g.onGround) { this.jets = JETS; this.jetRegen = 0; }
+    else if (this.jets < JETS) {
+      this.jetRegen += dt;
+      if (this.jetRegen >= 1.4) { this.jetRegen = 0; this.jets++; }
+    }
+    if (si.abilityBuffered(1 / 30)) {
+      si.consumeAbility();
+      if (this.jets > 0) {
+        this.jets--;
+        // in orizzontale un piccolo slancio verso l'alto: a terra l'attrito lo spegnerebbe subito
+        const vy = this.aim.y < 0 ? this.aim.y * JET_UP : this.aim.y > 0 ? this.aim.y * JET_SIDE : -200;
+        g.jet(this.aim.x * JET_SIDE, vy);
+        this.particles.emit({
+          texture: this.sparkTexture, x: g.x - this.aim.x * 6, y: g.y - 8 - this.aim.y * 6, count: 14,
+          speed: [60, 180], angle: [Math.atan2(-this.aim.y, -this.aim.x) - 0.5, Math.atan2(-this.aim.y, -this.aim.x) + 0.5],
+          life: [0.2, 0.45], scale: [0.08, 0.16], tint: ROLE_COLORS.soffio.main, additive: true, drag: 3,
+        });
+      } else {
+        this.burst(g.x, g.y - 8, PAL.steel0, 4);
+      }
+    }
+    // SOFFIO viaggia dentro GHISA: stessa posizione, così camera e traguardo tornano
+    so.placeAt(g.x, g.y);
+  }
+
+  /** Separazione: per scelta, a tempo scaduto, o perché un colpo ha spezzato la lega. */
+  private unfuse(reason: 'choice' | 'time' | 'hit'): void {
+    if (this.fusion <= 0 && reason !== 'time') return;
+    const [g, so] = this.players;
+    this.fusion = 0;
+    for (const p of this.players) { p.fused = false; p.hover = false; }
+    // SOFFIO esce accanto a GHISA, se c'è posto
+    const side = this.physics.overlapsSolid({ x: g.x + 4, y: g.y - 16, w: 11, h: 16 }) ? -10 : 10;
+    so.placeAt(g.x + side, g.y);
+    so.view.visible = this.alive[1];
+    this.burst(so.x, so.y - 8, ROLE_COLORS.soffio.main, 20);
+    if (reason === 'hit') {
+      g.blast(-150, -420);
+      so.blast(150, -420);
+      this.invuln[0] = Math.max(this.invuln[0], 1.2);
+      this.invuln[1] = Math.max(this.invuln[1], 1.2);
+      fxBus.emit({ type: 'flash', x: g.x, y: g.y - 8, color: GOLD, radius: 110, intensity: 1.8, life: 0.4 });
+      this.shake.add(0.5);
+      this.say('LA LEGA SI È SPEZZATA!', 1.4);
+    } else {
+      this.say(reason === 'time' ? 'LA LEGA SI RAFFREDDA: DI NUOVO IN DUE' : 'VI SIETE SEPARATI', 1.4);
+    }
   }
 
   private meltCrawler(c: Crawler): void {
@@ -817,30 +896,32 @@ export class Game {
     const g = this.fusionGfx;
     g.clear();
     if (this.fusion <= 0) return;
-    const fade = Math.min(1, this.fusion / 1.2);
-    const blink = this.fusion < 1.6 ? 0.4 + 0.6 * Math.abs(Math.sin(time * 14)) : 1;
-    // la scoria diventa un pavimento d'oro
-    for (const f of this.slagFloors) {
-      g.rect(f.box.x, f.box.y, f.box.w, 2).fill({ color: 0xfff1b8, alpha: 0.7 * blink });
+    const body = this.players[0];
+    const blink = this.fusion < 2 ? 0.4 + 0.6 * Math.abs(Math.sin(time * 14)) : 1;
+    const x = body.view.x, y = body.view.y - 9;
+    // aura doppia: brace fuori, aria dentro
+    const r = 12 + Math.sin(time * 9) * 1.5;
+    g.circle(x, y, r + 4).stroke({ width: 2, color: ROLE_COLORS.ghisa.main, alpha: 0.7 * blink });
+    g.circle(x, y, r).stroke({ width: 2, color: ROLE_COLORS.soffio.main, alpha: 0.8 * blink });
+    g.circle(x, y - 2, 3).fill({ color: ROLE_COLORS.soffio.light, alpha: 0.9 });
+    // mirino di SOFFIO: puntini lungo la direzione e una croce in fondo
+    for (let i = 1; i <= 4; i++) {
+      const d = 10 + i * 8;
+      g.circle(x + this.aim.x * d, y + this.aim.y * d, i === 4 ? 1.6 : 1).fill({ color: ROLE_COLORS.soffio.main, alpha: 0.9 });
     }
-    for (const p of this.players) {
-      if (!this.alive[p.id]) continue;
-      const x = p.view.x, y = p.view.y - 9;
-      const r = 13 + Math.sin(time * 10 + p.id * 2) * 2;
-      g.circle(x, y, r).stroke({ width: 2, color: GOLD, alpha: 0.75 * fade * blink });
-      g.circle(x, y, r + 5).stroke({ width: 1, color: 0xfff1b8, alpha: 0.35 * fade * blink });
-      sceneLights.put(x, y, 100, GOLD, 1.3 * fade);
-      if (Math.random() < 0.6) {
-        this.particles.emit({
-          texture: this.sparkTexture, x: x + (Math.random() - 0.5) * 10, y: y + 6, count: 1,
-          speed: [10, 40], life: [0.3, 0.6], scale: [0.06, 0.12], tint: GOLD, additive: true, gravity: -40,
-        });
-      }
+    const cx = x + this.aim.x * 46, cy = y + this.aim.y * 46;
+    g.moveTo(cx - 4, cy).lineTo(cx + 4, cy).moveTo(cx, cy - 4).lineTo(cx, cy + 4)
+      .stroke({ width: 1, color: ROLE_COLORS.soffio.light, alpha: 0.9 });
+    // getti rimasti, sopra la testa
+    for (let i = 0; i < JETS; i++) {
+      g.rect(x - 7 + i * 5, y - 20, 3, 3).fill({ color: i < this.jets ? ROLE_COLORS.soffio.main : PAL.slate1 });
     }
+    sceneLights.put(x, y, 90, GOLD, 1.1);
+    sceneLights.put(x + this.aim.x * 40, y + this.aim.y * 40, 26, ROLE_COLORS.soffio.glow, 0.5);
   }
 
   private restartFromCheckpoint(): void {
-    if (this.fusion > 0) { this.fusion = 0; this.endFusion(); }
+    if (this.fusion > 0) this.unfuse('time');
     this.loss = -1;
     this.lossOut = 0.5;
     for (const i of [0, 1] as const) {
@@ -882,6 +963,11 @@ export class Game {
     if (text) this.hud.showPrompt(text); else this.hud.hidePrompt();
 
     const r = this.embers.reserve;
+    if (this.fusion > 0) {
+      this.hud.setObjectStatus(0, `TANDEM · MUOVI E SPARA (E)  ${r}/${EmberSystem.RESERVE}`);
+      this.hud.setObjectStatus(1, `MIRA ↑↓←→ · GETTO - ${this.jets}/${JETS} · VELA .`);
+      return;
+    }
     this.hud.setObjectStatus(0, this.alive[0]
       ? `BRACI ${r}/${EmberSystem.RESERVE}`
       : 'TIZZONE: RAGGIUNGI SOFFIO');
@@ -912,7 +998,9 @@ export class Game {
   /* --- disegno -------------------------------------------------------- */
 
   render(alpha: number, frameDelta: number, fps: number): void {
-    for (const p of this.players) if (this.alive[p.id]) p.draw(alpha, this.time);
+    for (const p of this.players) {
+      if (this.alive[p.id] && !(this.fusion > 0 && p.id === 1)) p.draw(alpha, this.time);
+    }
     for (const { plate } of this.plates) plate.draw(this.time);
     for (const g of this.gates.values()) g.draw(this.time);
     this.fragile?.draw(this.time);
@@ -974,7 +1062,7 @@ export class Game {
   }
 
   present(renderer: Renderer): void {
-    for (const p of this.players) p.alive = this.alive[p.id];
+    for (const p of this.players) p.alive = this.alive[p.id] && !(this.fusion > 0 && p.id === 1);
     this.gfx.present(renderer, {
       time: this.time, players: this.players, shake: this.shake,
       invertFlash: this.mass.invertFlash, finished: this.finished, goal: this.goal,

@@ -71,16 +71,25 @@ che fate insieme. Razzi (+22%), scoppi, fornelli accesi, Scoriatori sciolti,
 gemme, inversioni e soprattutto rinascite (perfette +30%). Ogni razzo
 riuscito fa anche trattenere il fiato al mondo: un istante di tempo sospeso.
 
-Quando la Risonanza è piena, l'accordo `Q` + `.` non inverte le masse: scatena
-la **Fusione**. Per 7 secondi siete ghisa incandescente:
+Quando la Risonanza è piena, standovi vicini, l'accordo `Q` + `.` non inverte
+le masse: **vi fonde in un solo personaggio, TANDEM**. GHISA è il corpo, SOFFIO
+il motore:
 
-- si cammina sulla scoria (allo spegnimento c'è un attimo per scendere);
-- gli Scoriatori toccati si sciolgono, i magli non schiacciano;
-- si salta da leggeri ma sulle piastre si pesa da pesanti;
-- Schianto e Scatto sempre disponibili, braci infinite, soffio senza attesa.
+| | cosa comanda |
+|---|---|
+| **GHISA** | `A` `D` cammina, `W` salta, `S` in aria Schianto, `E` **spara** |
+| **SOFFIO** | frecce **mirano**, `-` **getto** di vapore nella direzione del mirino (3, si ricaricano a terra), `.` tenuto **vela** (caduta lenta) |
 
-La Fusione è una scorciatoia che si guadagna giocando bene in due: spenderla
-nel punto giusto di un livello è una scelta.
+Cosa ci guadagnate:
+
+- **un corpo pesante che vola**: pesa quanto tutti e due insieme (preme ogni
+  piastra, lo Schianto sfonda), ma con i getti sale di oltre 200 px;
+- **il cannone**: la brace parte dritta dove mira SOFFIO e scoppia all'impatto,
+  senza bisogno del soffio: loppa, fornelli e Scoriatori da lontano;
+- **lo scudo**: un colpo mortale (scoria, maglio, Scoriatore) spezza la lega
+  invece di uccidere, e vi sbalza fuori separati e intoccabili per un attimo.
+
+Ci si separa con lo stesso accordo, oppure da soli dopo 12 secondi.
 
 ## La campagna
 
