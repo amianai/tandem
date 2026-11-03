@@ -117,6 +117,8 @@ separarne due incastrate contro un muro. Le piastre sommano il peso di tutto
 ciò che ci sta sopra: due casse bastano, oppure una cassa più un giocatore
 leggero.
 
+**Gioca nel browser:** https://amianai.github.io/tandem/
+
 ## Avvio
 
 ```bash

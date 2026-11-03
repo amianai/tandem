@@ -31,19 +31,22 @@ function slice(base: Texture, tileW: number, tileH: number): Texture[] {
 
 const PARTICLE_FILES = ['circle_05', 'star_08', 'spark_04', 'smoke_08', 'light_01', 'trace_01'];
 
+/** Radice del sito: '/' in locale, '/tandem/' su GitHub Pages. */
+const BASE = import.meta.env.BASE_URL;
+
 export async function loadAssets(): Promise<Sheets> {
   // Pixel art: nessuna interpolazione, mai.
   TextureSource.defaultOptions.scaleMode = 'nearest';
 
   const [terrain, characters, backgrounds, industrial] = await Promise.all([
-    Assets.load<Texture>('/assets/tiles/terrain.png'),
-    Assets.load<Texture>('/assets/tiles/characters.png'),
-    Assets.load<Texture>('/assets/tiles/backgrounds.png'),
-    Assets.load<Texture>('/assets/tiles/industrial.png'),
+    Assets.load<Texture>(`${BASE}assets/tiles/terrain.png`),
+    Assets.load<Texture>(`${BASE}assets/tiles/characters.png`),
+    Assets.load<Texture>(`${BASE}assets/tiles/backgrounds.png`),
+    Assets.load<Texture>(`${BASE}assets/tiles/industrial.png`),
   ]);
 
   const particleTextures = await Promise.all(
-    PARTICLE_FILES.map((n) => Assets.load<Texture>(`/assets/particles/${n}.png`)),
+    PARTICLE_FILES.map((n) => Assets.load<Texture>(`${BASE}assets/particles/${n}.png`)),
   );
   const particles: Record<string, Texture> = {};
   PARTICLE_FILES.forEach((n, i) => { particles[n] = particleTextures[i]!; });
