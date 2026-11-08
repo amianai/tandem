@@ -72,7 +72,8 @@ gemme, inversioni e soprattutto rinascite (perfette +30%). Ogni razzo
 riuscito fa anche trattenere il fiato al mondo: un istante di tempo sospeso.
 
 Quando la Risonanza è piena, standovi vicini, l'accordo `Q` + `.` non inverte
-le masse: **vi fonde in un solo personaggio, TANDEM**. GHISA è il corpo, SOFFIO
+le masse: **vi fonde in un solo personaggio, TANDEM**. Da lontani (oltre 70 px)
+l'accordo inverte come sempre, anche a Risonanza piena. GHISA è il corpo, SOFFIO
 il motore:
 
 | | cosa comanda |
@@ -105,8 +106,9 @@ la crosta fredda: non brucia e non si gira ai bordi, quindi scivola via.
 
 ## La campagna
 
-Tre livelli brevi, uno dopo l'altro, senza suggerimenti a schermo: ognuno
-introduce una cosa nuova e la combina con le precedenti. Finito l'ultimo,
+Quattro livelli, uno dopo l'altro, senza suggerimenti a schermo: i primi tre
+sono brevi e introducono una cosa nuova ciascuno, il quarto le mette tutte
+insieme. Finito l'ultimo,
 schermata di vittoria con tempo, gemme, cadute e rinascite perfette.
 
 1. **Il Crogiolo** — il fuoco: loppa, fornelli, razzo (anche per GHISA),
@@ -116,6 +118,14 @@ schermata di vittoria con tempo, gemme, cadute e rinascite perfette.
 3. **La Colata** — lo **Scoriatore**: grumo di scoria che pattuglia e brucia
    al contatto. Non si colpisce: il soffio (più forte se SOFFIO è pesante) o uno
    scoppio lo spingono nella scoria. Lo Schianto vicino lo stordisce.
+4. **Il Cuore** — difficoltà medio-alta, sei stanze e una strada sola per
+   ciascuna: si usa tutto (Bilancia, Schianto, razzi, soffio, lingotto,
+   maglio, Scoriatori, morte e rinascita, Fusione col cannone, varco a due
+   piastre, lamiera, colonna d'aria, sfiato). Il **sifone** si passa solo
+   morendo: lo spirito nuota nella scoria sotto il muro e il soffio lo fa
+   rinascere dall'altra parte, attraverso la parete.
+
+Un cancello aperto non si richiude addosso a chi sta nel vano.
 
 Il **lingotto** è una cassa di ghisa da 0,6: da solo basta a una piastra, ma lo
 sposta solo chi è pesante. I personaggi salgono da soli i gradini di pochi
@@ -149,8 +159,8 @@ npm run build    # typecheck + bundle in dist/
 `Q` + `.` premuti **insieme** = inversione delle masse.
 Mentre uno dei due è morto, `Q` + `.` insieme fanno rinascere.
 
-Livelli: `?level=0..2` campagna (Crogiolo, Presse, Colata), `?level=3` La
-Fornace (prova), `?level=4` Sandbox 01. `Shift+N` passa al successivo. `Shift+R` riparte dall'ultima forgia.
+Livelli: `?level=0..3` campagna (Crogiolo, Presse, Colata, Il Cuore),
+`?level=4` La Fornace (prova), `?level=5` Sandbox 01. `Shift+N` passa al successivo. `Shift+R` riparte dall'ultima forgia.
 
 `M` audio acceso/spento · `F1` pannello diagnostico · `Shift+R` respawn di entrambi.
 

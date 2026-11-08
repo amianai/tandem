@@ -192,7 +192,7 @@ export class Game {
     this.slagWall = lTiles.length ? new SlagWall(this.map, lTiles) : null;
     const tTiles = tilesOf('T');
     for (const run of horizontalRuns(tTiles)) this.sheets.push(new Sheet(this.map, run));
-    for (const run of horizontalRuns(tilesOf('~'))) this.slag.push(new SlagPool(run, this.map.pixelHeight));
+    for (const run of horizontalRuns(tilesOf('~'))) this.slag.push(new SlagPool(run, this.map));
     let ventIndex = 0;
     for (const [ch, dir] of [['<', -1], ['>', 1]] as const) {
       for (const t of tilesOf(ch)) {
@@ -352,12 +352,11 @@ export class Game {
       this.fusion = Math.max(0, this.fusion - dt);
       if (this.chord.inSync) { this.chord.consume(); this.unfuse('choice'); }
       else if (this.fusion === 0) this.unfuse('time');
-    } else if (this.bothAlive && this.resonance >= 1 && this.chord.inSync) {
-      // Risonanza piena: l'accordo non inverte le masse, vi fonde.
+    } else if (this.bothAlive && this.resonance >= 1 && this.chord.inSync
+      && Math.hypot(this.players[0].x - this.players[1].x, this.players[0].y - this.players[1].y) <= FUSE_RANGE) {
+      // Risonanza piena: l'accordo da vicini vi fonde; da lontani inverte come sempre.
       this.chord.consume();
-      const [a, b] = this.players;
-      if (Math.hypot(a.x - b.x, a.y - b.y) <= FUSE_RANGE) this.startFusion();
-      else this.say('AVVICINATEVI PER FONDERVI', 1.4);
+      this.startFusion();
     } else if (this.bothAlive) {
       if (this.mass.update(dt, this.inputs[0], this.inputs[1], this.chord)) {
         sound.invert();
@@ -539,7 +538,14 @@ export class Game {
       fireGates.set(gate, (fireGates.get(gate) ?? true) && brazier.lit);
     }
     for (const [gate, allLit] of fireGates) if (allLit) open.set(gate, true);
-    for (const [ch, gate] of this.gates) gate.update(dt, open.get(ch) ?? false);
+    const inDoorway = [
+      ...living.map((p) => p.hitbox),
+      ...this.crates.map(({ crate }) => crate.box),
+      ...this.crawlers.filter((c) => c.alive).map((c) => c.box),
+    ];
+    for (const [ch, gate] of this.gates) {
+      gate.update(dt, open.get(ch) ?? false, inDoorway.some((b) => rectsOverlap(b, gate.bounds)));
+    }
     this.fragile?.update(dt, impacts);
 
     // 8. forge: si accendono solo se ci arrivate vivi tutti e due
@@ -747,8 +753,13 @@ export class Game {
     this.hitstop = DEATH_HITSTOP;
 
     const safe = this.lastSafe[i];
-    // un po' sopra i piedi: la scatola dello spirito non deve toccare il pavimento
-    this.spirits[i].spawn(safe.x, safe.y - 20);
+    // un po' sopra i piedi: la scatola dello spirito non deve toccare il pavimento,
+    // né il soffitto di un cunicolo basso (lì scende finché non è libera)
+    let sy = safe.y - 20;
+    const half = Spirit.SIZE / 2;
+    while (sy < safe.y - half - 1
+      && this.map.overlapsSolid({ x: safe.x - half, y: sy - half, w: Spirit.SIZE, h: Spirit.SIZE })) sy++;
+    this.spirits[i].spawn(safe.x, sy);
 
     const other = i === 0 ? 1 : 0;
     if (!this.alive[other]) {

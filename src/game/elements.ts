@@ -100,7 +100,7 @@ export class Gate {
   readonly container = new Container();
   private readonly gfx = new Graphics();
   private readonly tiles: { tx: number; ty: number }[];
-  private readonly bounds: Rect;
+  readonly bounds: Rect;
   private openness = 0;
   private solid = true;
 
@@ -119,9 +119,10 @@ export class Gate {
 
   private latched = false;
 
-  update(dt: number, open: boolean): void {
+  /** `occupied`: qualcosa sta nel vano. Un cancello aperto non si richiude addosso a nessuno. */
+  update(dt: number, open: boolean, occupied = false): void {
     if (open && this.latch) this.latched = true;
-    const target = this.latched || open;
+    const target = this.latched || open || (occupied && !this.solid);
     this.openness = damp(this.openness, target ? 1 : 0, 13, dt);
     const shouldBeSolid = this.openness < 0.5;
     if (shouldBeSolid !== this.solid) {

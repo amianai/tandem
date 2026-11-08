@@ -22,13 +22,23 @@ export class SlagPool {
 
   static readonly TOLERANCE = 3;
 
-  constructor(tiles: readonly T[], levelHeight: number) {
+  constructor(tiles: readonly T[], map: Tilemap) {
     this.container.addChild(this.gfx);
     const b = boundsOf(tiles);
     // la superficie sta a metà del tile marcato
     const top = b.y + TILE / 2;
-    this.surface = { x: b.x, y: top, w: b.w, h: levelHeight - top };
-    this.killZone = { x: b.x + 2, y: top + SlagPool.TOLERANCE, w: b.w - 4, h: levelHeight - top };
+    // il fondo è la prima riga tutta piena sotto la vasca (o il fondo del livello):
+    // così una vasca può avere un pavimento, e un sifone sotto un muro
+    const tx0 = b.x / TILE, tx1 = (b.x + b.w) / TILE - 1;
+    let ty = b.y / TILE + 1;
+    const full = (row: number): boolean => {
+      for (let tx = tx0; tx <= tx1; tx++) if (!map.isSolid(tx, row)) return false;
+      return true;
+    };
+    while (ty < map.height && !full(ty)) ty++;
+    const bottom = ty * TILE;
+    this.surface = { x: b.x, y: top, w: b.w, h: bottom - top };
+    this.killZone = { x: b.x + 2, y: top + SlagPool.TOLERANCE, w: b.w - 4, h: bottom - top };
   }
 
   kills(box: Rect): boolean { return rectsOverlap(box, this.killZone); }
