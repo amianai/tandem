@@ -175,7 +175,9 @@ export class CharacterArt {
     const b = this.brush;
     const { bob, run, air } = this.setupBrush(s, time);
     const m = s.mass;
-    const heat = clamp((m - 0.25) / 0.6, 0, 1);
+    // Non scende mai a zero: anche leggero GHISA cova la brace, e resta
+    // riconoscibile al buio e a schermo diviso quanto SOFFIO.
+    const heat = 0.35 + 0.65 * clamp((m - 0.25) / 0.6, 0, 1);
     const heavy = m >= 0.6;
 
     const W = Math.round(lerp(9, 13, m));           // busto
@@ -186,7 +188,12 @@ export class CharacterArt {
     const hot = mixColor(PAL.ember0, PAL.ember3, heat);
     const visor = this.blink > 0 ? PAL.night1 : mixColor(this.colors.dark, PAL.ember3, heat * 0.8);
 
-    const iron = { hi: PAL.steel1, lit: PAL.steel0, mid: PAL.slate3, dark: PAL.slate2, deep: PAL.night2 };
+    // ghisa calda, non acciaio: i toni freddi si confondevano con la notte dello sfondo
+    const warm = (c: number, k: number): number => mixColor(c, PAL.rust2, k);
+    const iron = {
+      hi: warm(PAL.steel1, 0.3), lit: warm(PAL.steel0, 0.35), mid: warm(PAL.slate3, 0.4),
+      dark: warm(PAL.slate2, 0.35), deep: PAL.night2,
+    };
 
     // gambe: in corsa si alternano, in aria si raccolgono
     const legSwing = Math.sin(run) * 2.2;
@@ -207,7 +214,7 @@ export class CharacterArt {
 
     // busto: blocco di ghisa con spigoli smussati
     b.rect(-hw, top, W, H, iron.mid);
-    b.rect(-hw, top, 1, H, iron.lit);
+    b.rect(-hw, top, 1, H, mixColor(iron.lit, PAL.ember2, 0.5 * heat));
     b.rect(-hw + W - 1, top, 1, H, iron.dark);
     b.rect(-hw, top + H - 1, W, 1, iron.dark);
     // cintura con fibbia d'ottone
@@ -466,7 +473,7 @@ export class CharacterArt {
     const m = s.mass;
     if (this.role === 'ghisa') {
       const heat = clamp((m - 0.25) / 0.6, 0, 1);
-      sceneLights.put(ix, iy - 9, 70 + heat * 34, this.colors.glow, 0.75 + heat * 0.4);
+      sceneLights.put(ix, iy - 9, 84 + heat * 30, this.colors.glow, 0.95 + heat * 0.35);
     } else {
       const light = clamp((0.75 - m) / 0.5, 0, 1);
       sceneLights.put(ix, iy - 10, 72 + light * 26, this.colors.glow, 0.75 + light * 0.3);

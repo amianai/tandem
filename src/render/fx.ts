@@ -318,7 +318,8 @@ export class FxDirector {
     // GHISA brilla di più da pesante, SOFFIO da leggero.
     for (const a of this.actors) {
       const c = ROLE_COLORS[a.role];
-      const k = a.role === 'ghisa' ? clamp((a.mass - 0.2) / 0.7, 0, 1) : clamp((0.8 - a.mass) / 0.7, 0, 1);
+      // soglia minima uguale per tutti e due: nessuno sparisce nel buio
+      const k = 0.45 + 0.55 * (a.role === 'ghisa' ? clamp((a.mass - 0.2) / 0.7, 0, 1) : clamp((0.8 - a.mass) / 0.7, 0, 1));
       const x = Math.round(a.view.x), y = Math.round(a.view.y) - 9;
       const base = 0.022 + k * 0.03;
       go.circle(x, y, 22).fill({ color: c.glow, alpha: base * 0.8 });

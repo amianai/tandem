@@ -1,4 +1,5 @@
 import { Container, Graphics, RenderTexture, Sprite, type Renderer, type Texture } from 'pixi.js';
+import { sound } from '../audio/sound';
 import { ChordDetector, Keyboard, P1_BINDING, P2_BINDING, PlayerInput } from '../core/input';
 import { rectsOverlap, type Rect } from '../core/math';
 import { CHARS, TILE, TILES, type Sheets } from '../render/assets';
@@ -121,6 +122,8 @@ export class Game {
   /** Direzione del mirino di SOFFIO (versore). */
   private aim: Point = { x: 1, y: 0 };
   private readonly fusionGfx = new Graphics();
+  /** Ombre a contatto sotto i personaggi: si capisce dove si atterra. */
+  private readonly shadowGfx = new Graphics();
   /** Tempo sospeso: secondi rimasti e accumulatore dei passi saltati. */
   private slowmo = 0;
   private slowAcc = 0;
@@ -268,6 +271,7 @@ export class Game {
     this.world.addChild(this.pickups.container);
     for (const { crate } of this.crates) this.world.addChild(crate.view);
     this.world.addChild(
+      this.shadowGfx,
       this.embers.container,
       this.players[0].view,
       this.players[1].view,
@@ -310,6 +314,7 @@ export class Game {
   private onSystemKey = (e: KeyboardEvent): void => {
     if (e.code === 'F1') { e.preventDefault(); this.debug.toggle(); }
     if (e.code === 'KeyR' && e.shiftKey) this.restartFromCheckpoint();
+    if (e.code === 'KeyM') this.say(sound.toggleMute() ? 'AUDIO SPENTO (M)' : 'AUDIO ACCESO (M)', 1.2);
   };
 
   private say(text: string, seconds = 1.8): void {
@@ -355,6 +360,7 @@ export class Game {
       else this.say('AVVICINATEVI PER FONDERVI', 1.4);
     } else if (this.bothAlive) {
       if (this.mass.update(dt, this.inputs[0], this.inputs[1], this.chord)) {
+        sound.invert();
         this.shake.add(0.3);
         for (const p of this.players) this.burst(p.x, p.y - 8, p.tint, 18);
         this.addResonance(0.03);
@@ -383,7 +389,10 @@ export class Game {
       box: p.hitbox, mass: p.mass, push: (ax: number, d: number) => p.pushAccel(ax, 0, d),
     }));
     for (const v of this.vents) {
-      if (v.update(dt, ventBodies)) fxBus.emit({ type: 'puff', x: v.ox, y: v.oy, count: 6, color: PAL.fog, dir: v.dir });
+      if (v.update(dt, ventBodies)) {
+        fxBus.emit({ type: 'puff', x: v.ox, y: v.oy, count: 6, color: PAL.fog, dir: v.dir });
+        if (living.some((p) => Math.abs(p.x - v.ox) < 260)) sound.vent();
+      }
     }
 
     // 3. personaggi vivi
@@ -407,6 +416,9 @@ export class Game {
       if (impact) {
         impacts.push(impact);
         this.shake.add(0.35 + impact.power * 0.3);
+        // fermo-immagine: il colpo si sente nelle mani
+        this.hitstop = Math.max(this.hitstop, 0.06);
+        sound.slam(impact.power);
         const broken = this.fragile?.shatter(
           impact.x, impact.y + 8, 42, this.particles, this.sparkTexture,
         ) ?? 0;
@@ -460,7 +472,8 @@ export class Game {
         this.embers.igniteNear(h.x + h.w / 2, h.bottom - 4, h.w / 2 + 6, 0.01);
         fxBus.emit({ type: 'puff', x: h.x + h.w / 2, y: h.bottom, count: 8, color: PAL.steel1 });
         const near = this.players.some((p) => this.alive[p.id] && Math.abs(p.x - (h.x + h.w / 2)) < 160);
-        if (near) this.shake.add(0.12);
+        if (near) { this.shake.add(0.12); sound.hammer(1); }
+        else if (this.players.some((p) => this.alive[p.id] && Math.abs(p.x - (h.x + h.w / 2)) < 420)) sound.hammer(0.3);
       }
     }
     for (const c of this.crawlers) {
@@ -487,7 +500,7 @@ export class Game {
         // la fusione fa da scudo: un colpo mortale la spezza invece di uccidere
         const hit = this.slag.some((s) => s.kills(box))
           || [...this.hammers.values()].some((h) => h.kills(box))
-          || this.crawlers.some((c) => c.alive && rectsOverlap(c.box, box));
+          || this.crawlers.some((c) => c.alive && c.stun <= 0 && rectsOverlap(c.box, box));
         if (hit) this.unfuse('hit');
         else if (p.y > this.map.pixelHeight + 32) { this.unfuse('time'); this.kill(0, 'void'); this.kill(1, 'void'); }
         continue;
@@ -495,7 +508,8 @@ export class Game {
       if (this.slag.some((s) => s.kills(box))) this.kill(p.id, 'slag');
       else if (p.y > this.map.pixelHeight + 32) this.kill(p.id, 'void');
       else if ([...this.hammers.values()].some((h) => h.kills(box))) this.kill(p.id, 'crush');
-      else if (this.crawlers.some((c) => c.alive && rectsOverlap(c.box, box))) this.kill(p.id, 'burn');
+      // stordito, lo Scoriatore ha la crosta fredda: si può toccare
+      else if (this.crawlers.some((c) => c.alive && c.stun <= 0 && rectsOverlap(c.box, box))) this.kill(p.id, 'burn');
     }
     for (const p of living) {
       if (!this.alive[p.id] || !p.onGround) continue;
@@ -544,12 +558,14 @@ export class Game {
     const boxes: Rect[] = living.map((p) => p.hitbox);
     if (this.pickups.update(dt, boxes, this.particles, this.sparkTexture) > 0) {
       this.addResonance(0.12);
+      sound.gem();
       this.hud.setGems(this.pickups.collected, this.pickups.total);
       this.shake.add(0.05);
     }
     if (!this.finished && this.goal && this.bothAlive && boxes.every((b) => rectsOverlap(b, this.goal!))) {
       this.finished = true;
       this.finishedAt = this.time;
+      sound.victory();
       this.shake.add(0.5);
       for (const p of this.players) this.burst(p.x, p.y - 10, p.tint, 40);
     }
@@ -567,26 +583,30 @@ export class Game {
           if (p.role === 'ghisa' && this.fusion > 0) {
             // cannone: spara GHISA, ha mirato SOFFIO
             if (this.embers.fire(p.x, p.y - 10, this.aim.x, this.aim.y)) {
+              sound.cannon();
               fxBus.emit({ type: 'flash', x: p.x + this.aim.x * 10, y: p.y - 10 + this.aim.y * 10, color: PAL.ember3, radius: 40, intensity: 1, life: 0.15 });
               this.shake.add(0.08);
             } else {
               this.burst(p.x, p.y - 14, PAL.steel0, 4);
             }
           } else if (p.role === 'ghisa') {
-            if (!this.embers.throw(p.x, p.y, p.facingDir, p.mass, e.aim, p.onGround, p.vx)) {
-              this.burst(p.x - p.facingDir * 6, p.y - 14, PAL.steel0, 4);
-            }
+            if (this.embers.throw(p.x, p.y, p.facingDir, p.mass, e.aim, p.onGround, p.vx)) sound.throwEmber();
+            else this.burst(p.x - p.facingDir * 6, p.y - 14, PAL.steel0, 4);
           } else {
             const cone = this.embers.blow(p.x, p.y, p.facingDir, p.mass, e.aim);
-            if (cone) this.applyBlow(p, cone);
+            if (cone) { this.applyBlow(p, cone); sound.blow(p.mass); }
           }
           break;
         case 'denied':
           this.say('SCHIANTO (S IN ARIA): GHISA DEVE ESSERE PESANTE');
           this.burst(p.x, p.y - 10, 0x8b93a8, 6);
+          sound.denied();
           break;
         case 'jumped':
+          sound.jump(p.mass);
+          break;
         case 'landed':
+          if (!e.slam) sound.land(Math.min(1, e.vy / 470), p.mass);
           break;
       }
     }
@@ -630,6 +650,8 @@ export class Game {
   private explode(ex: Explosion): void {
     const big = ex.size === 'big' ? 1 : ex.size === 'mid' ? 0.7 : 0.45;
     this.addResonance(0.04);
+    sound.explosion(ex.size, ex.missile);
+    if (big === 1) this.hitstop = Math.max(this.hitstop, 0.04);
     fxBus.emit({ type: 'flash', x: ex.x, y: ex.y, color: PAL.ember3, radius: ex.radius * 2.4, intensity: 1.7, life: 0.3 });
     fxBus.emit({ type: 'ring', x: ex.x, y: ex.y, color: PAL.ember2, radius: ex.radius, life: 0.35 });
     fxBus.emit({ type: 'sparks', x: ex.x, y: ex.y, color: PAL.ember3, count: 12 + Math.round(big * 10) });
@@ -671,8 +693,16 @@ export class Game {
       if (d > ex.radius + 6) continue;
       const nx = d < 4 ? 0 : (cx - ex.x) / d;
       const ny = d < 4 ? -1 : (cy - ex.y) / d;
+      // il colpo di cannone spinge di più e stordisce: lo Scoriatore stordito
+      // non si gira ai bordi, quindi scivola dritto giù
       const speed = BLAST_SPEED * (1 - Crawler.MASS);
-      c.blast(nx * speed * 0.85, -Math.max(-ny, 0.5) * speed);
+      if (ex.missile) {
+        // radente: lo spinge lungo il pavimento invece di lanciarlo oltre la scoria
+        c.blast(Math.sign(nx || 1) * Math.max(Math.abs(nx), 0.8) * speed * 1.2, -Math.max(-ny, 0.15) * speed * 0.5);
+        c.stun = Math.max(c.stun, 2.2);
+      } else {
+        c.blast(nx * speed * 0.85, -Math.max(-ny, 0.5) * speed);
+      }
     }
     this.embers.igniteNear(ex.x, ex.y, ex.radius * 1.25, EmberSystem.CHAIN_DELAY);
 
@@ -687,6 +717,7 @@ export class Game {
     for (const { brazier } of this.braziers) {
       if (brazier.tryLight(ex.x, ex.y, ex.radius)) {
         this.addResonance(0.12);
+        sound.brazier();
         fxBus.emit({ type: 'flash', x: brazier.x, y: brazier.y - 14, color: PAL.ember2, radius: 60, intensity: 1.2, life: 0.4 });
         const left = this.braziers.filter((b) => !b.brazier.lit).length;
         this.say(left > 0 ? `FORNELLO ACCESO: NE MANCANO ${left}` : 'FORNELLI ACCESI: IL CANCELLO SI APRE');
@@ -706,6 +737,7 @@ export class Game {
     this.alive[i] = false;
     this.deaths++;
     p.view.visible = false;
+    sound.death();
     const color = ROLE_COLORS[p.role].main;
     fxBus.emit({ type: 'flash', x: p.x, y: p.y - 8, color, radius: 80, intensity: 1.5, life: 0.4 });
     fxBus.emit({ type: 'debris', x: p.x, y: p.y - 8, color, count: 12, up: 1 });
@@ -721,6 +753,7 @@ export class Game {
     const other = i === 0 ? 1 : 0;
     if (!this.alive[other]) {
       this.loss = 0;
+      sound.loss();
       this.say('COLATA PERSA', 1.2);
       return;
     }
@@ -763,6 +796,7 @@ export class Game {
     this.spirits[i].hide();
     p.placeAt(at.x, at.y);
     p.view.visible = true;
+    sound.revive(perfect);
     this.invuln[i] = perfect ? 1 : 0.6;
     const color = ROLE_COLORS[p.role].main;
 
@@ -796,12 +830,14 @@ export class Game {
     if (this.resonance >= 1 && !this.resonanceAnnounced) {
       this.resonanceAnnounced = true;
       this.say('RISONANZA PIENA: Q + . INSIEME PER LA FUSIONE', 2.4);
+      sound.resonanceFull();
       for (const p of this.players) if (this.alive[p.id]) this.burst(p.x, p.y - 10, GOLD, 16);
     }
   }
 
   private startFusion(): void {
     const [g, so] = this.players;
+    sound.fusion();
     this.fusion = FUSION_TIME;
     this.resonance = 0;
     this.resonanceAnnounced = false;
@@ -847,6 +883,7 @@ export class Game {
         // in orizzontale un piccolo slancio verso l'alto: a terra l'attrito lo spegnerebbe subito
         const vy = this.aim.y < 0 ? this.aim.y * JET_UP : this.aim.y > 0 ? this.aim.y * JET_SIDE : -200;
         g.jet(this.aim.x * JET_SIDE, vy);
+        sound.jet();
         this.particles.emit({
           texture: this.sparkTexture, x: g.x - this.aim.x * 6, y: g.y - 8 - this.aim.y * 6, count: 14,
           speed: [60, 180], angle: [Math.atan2(-this.aim.y, -this.aim.x) - 0.5, Math.atan2(-this.aim.y, -this.aim.x) + 0.5],
@@ -865,6 +902,7 @@ export class Game {
     if (this.fusion <= 0 && reason !== 'time') return;
     const [g, so] = this.players;
     this.fusion = 0;
+    sound.unfuse(reason === 'hit');
     for (const p of this.players) { p.fused = false; p.hover = false; }
     // SOFFIO esce accanto a GHISA, se c'è posto
     const side = this.physics.overlapsSolid({ x: g.x + 4, y: g.y - 16, w: 11, h: 16 }) ? -10 : 10;
@@ -887,9 +925,38 @@ export class Game {
   private meltCrawler(c: Crawler): void {
     if (!c.alive) return;
     c.alive = false;
+    sound.melt();
     fxBus.emit({ type: 'sparks', x: c.x, y: c.y - 4, color: PAL.ember3, count: 14, up: true });
     fxBus.emit({ type: 'flash', x: c.x, y: c.y - 4, color: PAL.ember2, radius: 50, intensity: 1, life: 0.3 });
     this.addResonance(0.2);
+  }
+
+  /** Primo pavimento sotto (x, y) entro `max` px: tile solido, attraversabile o superficie della scoria. */
+  private floorBelow(x: number, y: number, max: number): number | null {
+    const tx = Math.floor(x / TILE);
+    for (let ty = Math.floor(y / TILE); ty * TILE <= y + max; ty++) {
+      if (this.map.isSolid(tx, ty) || this.map.isOneWay(tx, ty)) return ty * TILE;
+      for (const s of this.slag) {
+        const z = s.killZone;
+        if (x >= z.x && x <= z.x + z.w && z.y - 3 >= ty * TILE && z.y - 3 < (ty + 1) * TILE) return z.y - 3;
+      }
+    }
+    return null;
+  }
+
+  private drawShadows(): void {
+    const g = this.shadowGfx;
+    g.clear();
+    for (const p of this.players) {
+      if (!this.alive[p.id] || (this.fusion > 0 && p.id === 1)) continue;
+      const x = p.view.x, feet = p.view.y;
+      const floor = this.floorBelow(x, feet - 1, 120);
+      if (floor === null) continue;
+      const h = Math.max(0, floor - feet);
+      const k = 1 - Math.min(1, h / 120);
+      const w = (this.fusion > 0 ? 9 : 7) * (0.5 + 0.5 * k);
+      g.ellipse(x, floor - 0.5, w, 1.6 * (0.6 + 0.4 * k)).fill({ color: 0x000000, alpha: 0.45 * k + 0.08 });
+    }
   }
 
   private drawFusion(time: number): void {
@@ -1022,6 +1089,7 @@ export class Game {
     const ready = this.reviveReady();
     this.spirits.forEach((s) => s.draw(alpha, this.time, ready));
     this.drawFusion(this.time);
+    this.drawShadows();
     this.hud.setResonance(frameDelta, this.resonance, this.fusion, this.time);
 
     this.hud.setMass(

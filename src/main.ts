@@ -1,4 +1,5 @@
 import { Application } from 'pixi.js';
+import { sound } from './audio/sound';
 import { Loop } from './core/loop';
 import { loadAssets } from './render/assets';
 import { Game } from './game/game';
@@ -35,6 +36,11 @@ async function boot(): Promise<void> {
     ]);
     await document.fonts.ready;
   } catch { /* nessun font custom: si usa il monospace di sistema */ }
+
+  // L'audio parte al primo tasto o clic: prima il browser lo tiene spento.
+  const unlockAudio = (): void => sound.unlock();
+  window.addEventListener('keydown', unlockAudio);
+  window.addEventListener('pointerdown', unlockAudio);
 
   const sheets = await loadAssets();
 
@@ -133,6 +139,9 @@ async function boot(): Promise<void> {
       window.removeEventListener('resize', fit);
       window.removeEventListener('keydown', onLevelKey);
       window.removeEventListener('keydown', onVictoryKey);
+      window.removeEventListener('keydown', unlockAudio);
+      window.removeEventListener('pointerdown', unlockAudio);
+      sound.dispose();
       app.destroy(true, { children: true, texture: true });
       mount.replaceChildren();
     });

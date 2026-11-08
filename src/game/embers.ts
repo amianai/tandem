@@ -40,7 +40,7 @@ export interface Ember {
   missile: boolean;
 }
 
-export interface Explosion { x: number; y: number; radius: number; size: EmberSize }
+export interface Explosion { x: number; y: number; radius: number; size: EmberSize; missile: boolean }
 
 /** Il cono del Tiraggio, per sapere chi ne è investito. */
 export class Cone {
@@ -248,7 +248,7 @@ export class EmberSystem {
         e.fuse -= dt;
         if (e.fuse <= 0) {
           this.embers.splice(i, 1);
-          out.push({ x: e.x, y: e.y, radius: e.radius, size: e.size });
+          out.push({ x: e.x, y: e.y, radius: e.radius, size: e.size, missile: e.missile });
         }
       }
     }

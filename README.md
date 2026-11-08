@@ -91,6 +91,18 @@ Cosa ci guadagnate:
 
 Ci si separa con lo stesso accordo, oppure da soli dopo 12 secondi.
 
+## Audio e sensazione degli impatti
+
+Tutti i suoni sono sintetizzati in tempo reale con Web Audio (`src/audio/sound.ts`),
+senza file: salti, atterraggi, braci, soffio, scoppi (più gravi se grossi),
+Schianto, magli, morte e rinascita, Fusione, getti e cannone, più una musica
+di fondo generata. Partono al primo tasto premuto; `M` li spegne.
+
+Lo Schianto e gli scoppi grossi fermano il mondo per qualche centesimo di
+secondo (hit-stop), e sotto i personaggi c'è un'ombra che indica dove si
+atterra. Uno Scoriatore stordito (dallo Schianto o dal cannone di TANDEM) ha
+la crosta fredda: non brucia e non si gira ai bordi, quindi scivola via.
+
 ## La campagna
 
 Tre livelli brevi, uno dopo l'altro, senza suggerimenti a schermo: ognuno
@@ -140,7 +152,7 @@ Mentre uno dei due è morto, `Q` + `.` insieme fanno rinascere.
 Livelli: `?level=0..2` campagna (Crogiolo, Presse, Colata), `?level=3` La
 Fornace (prova), `?level=4` Sandbox 01. `Shift+N` passa al successivo. `Shift+R` riparte dall'ultima forgia.
 
-`F1` pannello diagnostico · `Shift+R` respawn di entrambi.
+`M` audio acceso/spento · `F1` pannello diagnostico · `Shift+R` respawn di entrambi.
 
 I binding usano `KeyboardEvent.code`, cioè la **posizione fisica** del tasto:
 funzionano identici su layout italiano, americano o altro.
