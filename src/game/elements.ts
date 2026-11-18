@@ -119,10 +119,12 @@ export class Gate {
 
   private latched = false;
 
-  /** `occupied`: qualcosa sta nel vano. Un cancello aperto non si richiude addosso a nessuno. */
-  update(dt: number, open: boolean, occupied = false): void {
+  /** Chiuso (solido). Chi resta nel vano quando si chiude viene spinto fuori dal gioco. */
+  get closed(): boolean { return this.solid; }
+
+  update(dt: number, open: boolean): void {
     if (open && this.latch) this.latched = true;
-    const target = this.latched || open || (occupied && !this.solid);
+    const target = this.latched || open;
     this.openness = damp(this.openness, target ? 1 : 0, 13, dt);
     const shouldBeSolid = this.openness < 0.5;
     if (shouldBeSolid !== this.solid) {

@@ -27,13 +27,20 @@ interface NoiseOpts {
   delay?: number;
 }
 
+const MUTE_KEY = 'tandem.muted';
+
+function readMuted(): boolean {
+  try { return localStorage.getItem(MUTE_KEY) === '1'; } catch { return false; }
+}
+
 class Sound {
   private ctx: AudioContext | null = null;
   private master!: GainNode;
   private sfx!: GainNode;
   private music!: GainNode;
   private noiseBuf!: AudioBuffer;
-  private muted = false;
+  /** Ricordato fra un livello e l'altro (ogni cambio di livello ricarica la pagina). */
+  private muted = readMuted();
   /** Ultimo istante in cui è suonato ogni tipo di suono: evita i "muri" di rumore. */
   private readonly last = new Map<string, number>();
   private musicTimer = 0;
@@ -50,7 +57,7 @@ class Sound {
     const ctx = new Ctx();
     this.ctx = ctx;
     this.master = ctx.createGain();
-    this.master.gain.value = 0.8;
+    this.master.gain.value = this.muted ? 0 : 0.8;
     // un compressore leggero: venti scoppi insieme non devono spaccare le casse
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
@@ -73,6 +80,7 @@ class Sound {
 
   toggleMute(): boolean {
     this.muted = !this.muted;
+    try { localStorage.setItem(MUTE_KEY, this.muted ? '1' : '0'); } catch { /* storage non disponibile */ }
     if (this.ctx) this.master.gain.setTargetAtTime(this.muted ? 0 : 0.8, this.ctx.currentTime, 0.05);
     return this.muted;
   }

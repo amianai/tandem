@@ -314,7 +314,7 @@ export class Game {
   private onSystemKey = (e: KeyboardEvent): void => {
     if (e.code === 'F1') { e.preventDefault(); this.debug.toggle(); }
     if (e.code === 'KeyR' && e.shiftKey) this.restartFromCheckpoint();
-    if (e.code === 'KeyM') this.say(sound.toggleMute() ? 'AUDIO SPENTO (M)' : 'AUDIO ACCESO (M)', 1.2);
+    if (e.code === 'KeyM' && !e.repeat) this.say(sound.toggleMute() ? 'AUDIO SPENTO (M)' : 'AUDIO ACCESO (M)', 1.2);
   };
 
   private say(text: string, seconds = 1.8): void {
@@ -499,7 +499,7 @@ export class Game {
         // la fusione fa da scudo: un colpo mortale la spezza invece di uccidere
         const hit = this.slag.some((s) => s.kills(box))
           || [...this.hammers.values()].some((h) => h.kills(box))
-          || this.crawlers.some((c) => c.alive && c.stun <= 0 && rectsOverlap(c.box, box));
+          || this.crawlerBurns(box);
         if (hit) this.unfuse('hit');
         else if (p.y > this.map.pixelHeight + 32) { this.unfuse('time'); this.kill(0, 'void'); this.kill(1, 'void'); }
         continue;
@@ -508,7 +508,7 @@ export class Game {
       else if (p.y > this.map.pixelHeight + 32) this.kill(p.id, 'void');
       else if ([...this.hammers.values()].some((h) => h.kills(box))) this.kill(p.id, 'crush');
       // stordito, lo Scoriatore ha la crosta fredda: si può toccare
-      else if (this.crawlers.some((c) => c.alive && c.stun <= 0 && rectsOverlap(c.box, box))) this.kill(p.id, 'burn');
+      else if (this.crawlerBurns(box)) this.kill(p.id, 'burn');
     }
     for (const p of living) {
       if (!this.alive[p.id] || !p.onGround) continue;
@@ -538,13 +538,9 @@ export class Game {
       fireGates.set(gate, (fireGates.get(gate) ?? true) && brazier.lit);
     }
     for (const [gate, allLit] of fireGates) if (allLit) open.set(gate, true);
-    const inDoorway = [
-      ...living.map((p) => p.hitbox),
-      ...this.crates.map(({ crate }) => crate.box),
-      ...this.crawlers.filter((c) => c.alive).map((c) => c.box),
-    ];
     for (const [ch, gate] of this.gates) {
-      gate.update(dt, open.get(ch) ?? false, inDoorway.some((b) => rectsOverlap(b, gate.bounds)));
+      gate.update(dt, open.get(ch) ?? false);
+      if (gate.closed) this.clearDoorway(gate.bounds, living);
     }
     this.fragile?.update(dt, impacts);
 
@@ -733,6 +729,34 @@ export class Game {
     if (s.active && Math.hypot(s.x - ex.x, s.y - ex.y) <= ex.radius + 6) {
       this.revive(1, this.revivePoint(1, s), s.onBeat, 'ember');
     }
+  }
+
+  /**
+   * Un cancello che si chiude non intrappola nessuno nel muro: chi è nel vano
+   * viene spinto fuori, dal lato più vicino. Non lo tiene aperto, quindi non si
+   * può bloccare un cancello mettendocisi in mezzo.
+   */
+  private clearDoorway(door: Rect, living: readonly Player[]): void {
+    const things: { box: Rect; shift: (dx: number) => void }[] = [
+      ...living.map((p) => ({ box: p.hitbox, shift: (dx: number) => { p.x += dx; p.prevX += dx; } })),
+      ...this.crates.map(({ crate }) => ({ box: crate.box, shift: (dx: number) => { crate.x += dx; crate.prevX += dx; } })),
+      ...this.crawlers.filter((c) => c.alive)
+        .map((c) => ({ box: c.box, shift: (dx: number) => { c.x += dx; c.prevX += dx; } })),
+    ];
+    for (const { box, shift } of things) {
+      if (!rectsOverlap(box, door)) continue;
+      const toLeft = door.x - (box.x + box.w) - 0.5;
+      const toRight = door.x + door.w - box.x + 0.5;
+      const order = Math.abs(toLeft) <= Math.abs(toRight) ? [toLeft, toRight] : [toRight, toLeft];
+      for (const dx of order) {
+        if (!this.map.overlapsSolid({ ...box, x: box.x + dx })) { shift(dx); break; }
+      }
+    }
+  }
+
+  /** Uno Scoriatore che brucia (non stordito) tocca questa scatola. */
+  private crawlerBurns(box: Rect): boolean {
+    return this.crawlers.some((c) => c.alive && c.stun <= 0 && rectsOverlap(c.box, box));
   }
 
   /* --- morte e rinascita --------------------------------------------- */
